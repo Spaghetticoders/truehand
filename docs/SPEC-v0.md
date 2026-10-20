@@ -215,6 +215,11 @@ and TTY checks remain as early, friendly refusals.
 - The OS dialog appears whenever something asks for it, so an agent can raise it at a moment
   of its choosing and hope for a distracted click. The prompt names the task and its title;
   read it before authenticating.
+- The desktop app (truehand-desktop) talks to a local backend with no login. Its
+  `/api/truehand/*` routes require a per-launch key that only the app's own window receives,
+  and no process the backend spawns (agents, their terminals, the CLI) inherits it, so web
+  pages and casual scripts are refused. A same-user agent can still read the key from the
+  backend's environment (`ps eww`); the OS dialog remains the barrier, as above.
 - File edits made through Bash (`sed -i`, redirects) are not recorded as "edited"; only the
   Write/Edit tools are. Hands and the move to building still mark their actors as workers.
 - Tasks are not moved back automatically when evidence goes stale (reads never write): the
