@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "truehand": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/truehand",
+      "args": ["mcp"]
+    }
+  }
+}

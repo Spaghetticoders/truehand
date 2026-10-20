@@ -1,0 +1,16 @@
+{
+  "name": "truehand",
+  "owner": {
+    "name": "Spaghetticoders"
+  },
+  "plugins": [
+    {
+      "name": "truehand",
+      "source": "./plugin",
+      "description": "Gated task board, deterministic hands and agent locks for AI coding workflows."
+    }
+  ],
+  "metadata": {
+    "description": "Truehand: reliable hands and a gated workflow for AI coding agents."
+  }
+}

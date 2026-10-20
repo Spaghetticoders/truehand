@@ -1,0 +1,33 @@
+name: Truehand verify
+description: Merge lock — every changed file must belong to a delivered Truehand task whose gates still pass.
+branding:
+  icon: check-square
+  color: blue
+inputs:
+  base:
+    description: Base ref to diff against. Defaults to the pull request base branch.
+    required: false
+    default: ""
+  version:
+    description: Truehand version to install (a tag or "latest").
+    required: false
+    default: latest
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.25"
+        cache: false
+    - name: Install truehand
+      shell: bash
+      run: go install github.com/spaghetticoders/truehand/cmd/truehand@${{ inputs.version }}
+    - name: Verify
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        PR_BASE: ${{ github.base_ref }}
+      run: |
+        base="$BASE"
+        if [ -z "$base" ] && [ -n "$PR_BASE" ]; then base="origin/$PR_BASE"; fi
+        if [ -n "$base" ]; then truehand ci verify --base "$base"; else truehand ci verify; fi

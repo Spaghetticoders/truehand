@@ -1,0 +1,18 @@
+#!/bin/sh
+# Finds the real truehand binary: one bundled next to this shim, else the first other
+# "truehand" on PATH (this directory is on the agent's PATH too, so skip it).
+here=$(cd "$(dirname "$0")" && pwd)
+if [ -x "$here/truehand-$(uname -s)-$(uname -m)" ]; then
+  exec "$here/truehand-$(uname -s)-$(uname -m)" "$@"
+fi
+IFS=:
+for d in $PATH; do
+  [ "$(cd "$d" 2>/dev/null && pwd)" = "$here" ] && continue
+  if [ -x "$d/truehand" ]; then
+    exec "$d/truehand" "$@"
+  fi
+done
+# Hooks must never break a session because the binary is missing.
+[ "$1" = "hook" ] && exit 0
+echo "truehand is not installed: brew install spaghetticoders/tap/truehand, or go install github.com/spaghetticoders/truehand/cmd/truehand@latest" >&2
+exit 127

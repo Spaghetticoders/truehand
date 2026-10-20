@@ -1,0 +1,9 @@
+{
+  "name": "truehand",
+  "version": "0.1.0",
+  "description": "Reliable hands for AI coding agents: a gated task board, deterministic hands (test proof, eyes on the real screen vs Figma, ticket to plan) and locks that keep agents on the workflow.",
+  "author": { "name": "Spaghetticoders" },
+  "homepage": "https://truehand.com",
+  "license": "Apache-2.0",
+  "keywords": ["workflow", "quality", "gates", "figma", "testing", "flutter"]
+}
