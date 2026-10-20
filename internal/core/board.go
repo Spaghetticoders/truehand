@@ -13,9 +13,12 @@ import (
 // BoardTask is one card of the board: the task, where it stands and what blocks it.
 type BoardTask struct {
 	*board.Task
-	Active  bool     `json:"active"`
-	Stale   bool     `json:"stale"`
-	Merged  bool     `json:"merged"`
+	Active bool `json:"active"`
+	Stale  bool `json:"stale"`
+	Merged bool `json:"merged"`
+	// Branch is set for a task committed on another local branch than the checked-out one;
+	// such a task is shown read-only.
+	Branch  string   `json:"branch,omitempty"`
 	Next    string   `json:"next,omitempty"`
 	Missing []string `json:"missing"`
 }
@@ -48,6 +51,11 @@ func (w *Workspace) Board() (*BoardView, error) {
 		}
 		v.Tasks = append(v.Tasks, bt)
 	}
+	known := map[string]bool{}
+	for _, t := range tasks {
+		known[t.ID] = true
+	}
+	v.Tasks = append(v.Tasks, w.branchTasks(known)...)
 	return v, nil
 }
 

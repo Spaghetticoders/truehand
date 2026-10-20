@@ -307,6 +307,7 @@ func cmdTaskShow(c *ctx, args []string) error {
 	fs := flag.NewFlagSet("task show", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "JSON output")
 	full := fs.Bool("full", false, "with --json: include the plan and the event log")
+	branch := fs.String("branch", "", "with --json --full: read the task as committed on this branch")
 	pos, _, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -314,6 +315,16 @@ func cmdTaskShow(c *ctx, args []string) error {
 	ws, err := c.workspace()
 	if err != nil {
 		return err
+	}
+	if *branch != "" {
+		if !*asJSON || !*full || len(pos) != 1 {
+			return errors.New("usage: truehand task show <id> --branch <branch> --json --full")
+		}
+		d, err := ws.BranchDetail(*branch, pos[0])
+		if err != nil {
+			return err
+		}
+		return printJSON(c.stdout, d)
 	}
 	t, err := ws.ResolveTask(first(pos))
 	if err != nil {

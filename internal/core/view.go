@@ -18,6 +18,8 @@ type EvidenceView struct {
 type TaskView struct {
 	Task        *board.Task `json:"task"`
 	Description string      `json:"description"`
+	// Branch is set when the task was read from another branch than the checked-out one.
+	Branch string `json:"branch,omitempty"`
 	// Comments are every comment on the task, newest last, including those added after
 	// context.md was written.
 	Comments  []board.Event    `json:"comments"`

@@ -258,3 +258,22 @@ func TestMergedTaskIsDoneNotStale(t *testing.T) {
 		t.Fatalf("once merged, later commits must not make T-1 stale: %+v", bt)
 	}
 }
+
+func TestBoardShowsTasksCommittedOnOtherBranches(t *testing.T) {
+	s := deliveredBranch(t)
+	s.git("checkout", "-q", "main")
+	var b core.BoardView
+	if err := json.Unmarshal([]byte(s.must("board")), &b); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Tasks) != 1 || b.Tasks[0].ID != "T-1" || b.Tasks[0].Branch != "feat/greet" || b.Tasks[0].State != "delivered" {
+		t.Fatalf("T-1, delivered on feat/greet, must stay on the board from main: %+v", b.Tasks)
+	}
+	out := s.must("task", "show", "T-1", "--branch", "feat/greet", "--json", "--full")
+	if !strings.Contains(out, `"branch": "feat/greet"`) || !strings.Contains(out, `"exists": true`) {
+		t.Fatalf("branch detail:\n%s", out)
+	}
+	if out := s.fails(1, "task", "show", "T-1", "--branch", "--output=/tmp/x", "--json", "--full"); !strings.Contains(out, "invalid branch") {
+		t.Fatalf("option-like branch names must be refused:\n%s", out)
+	}
+}
