@@ -181,3 +181,47 @@ func writeAtomic(path string, b []byte) error {
 
 // WriteFileAtomic is exported for other packages writing task files.
 func WriteFileAtomic(path string, b []byte) error { return writeAtomic(path, b) }
+
+// DescriptionPath is the task's own brief: the ticket when no external tracker is used.
+func (s *Store) DescriptionPath(id string) string {
+	return filepath.Join(s.TaskDir(id), "description.md")
+}
+
+func (s *Store) Description(id string) (string, error) {
+	b, err := os.ReadFile(s.DescriptionPath(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	return string(b), err
+}
+
+func (s *Store) SetDescription(id, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		if err := os.Remove(s.DescriptionPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return writeAtomic(s.DescriptionPath(id), []byte(text+"\n"))
+}
+
+// NextID returns prefix-N with N one above the highest number already used with that prefix.
+func (s *Store) NextID(prefix string) (string, error) {
+	entries, err := os.ReadDir(s.TasksDir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	n := 0
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), prefix+"-")
+		if !ok {
+			continue
+		}
+		var k int
+		if _, err := fmt.Sscanf(rest, "%d", &k); err == nil && fmt.Sprint(k) == rest && k > n {
+			n = k
+		}
+	}
+	return fmt.Sprintf("%s-%d", prefix, n+1), nil
+}

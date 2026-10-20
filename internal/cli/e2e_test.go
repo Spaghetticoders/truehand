@@ -163,11 +163,12 @@ func TestFullLifecycle(t *testing.T) {
 	if code, out := s.run("nope\n", "approve"); code == 0 {
 		t.Fatalf("approve with wrong confirmation should fail:\n%s", out)
 	}
-	if code, out := s.run("T-1\n", "approve"); code != 0 {
+	if code, out := s.run("T-1\n", "approve"); code != 0 || !strings.Contains(out, "T-1 is now approved") {
 		t.Fatalf("approve: %d\n%s", code, out)
 	}
 
-	// Editing the plan after approval voids it.
+	// Editing the plan after approval voids it: back to planned, the old approval no longer counts.
+	s.must("task", "move", "planned")
 	s.write(".truehand/tasks/T-1/plan.md", validPlan+"\nextra\n")
 	out = s.fails(3, "task", "move", "approved")
 	if !strings.Contains(out, "changed after the last approval") {
@@ -319,5 +320,57 @@ func TestGroupHelp(t *testing.T) {
 		if !strings.Contains(out, args[0]+" ") || !strings.Contains(out, "Usage: truehand "+args[0]) {
 			t.Fatalf("%v: %s", args, out)
 		}
+	}
+}
+
+func TestOwnTicketFlow(t *testing.T) {
+	s := newSandbox(t)
+	s.must("init", "--stack", "generic")
+	out := s.must("task", "new", "--title", "Dark mode", "--description", "Users want a dark theme.\n\nFollow the system setting.")
+	if !strings.Contains(out, "Created T-1") {
+		t.Fatalf("expected auto id T-1:\n%s", out)
+	}
+	s.must("task", "new", "--title", "Second")
+	if out := s.fails(1, "plan", "fetch", "--task", "T-2"); !strings.Contains(out, "has no description") {
+		t.Fatalf("expected missing description error:\n%s", out)
+	}
+	s.must("task", "comment", "T-1", "Keep the toggle in settings too.")
+	s.must("task", "edit", "T-1", "--title", "Dark theme")
+	s.must("plan", "fetch", "--task", "T-1")
+	ctxmd := readFile(t, filepath.Join(s.dir, ".truehand/tasks/T-1/context.md"))
+	for _, want := range []string{"T-1 — Dark theme", "Follow the system setting.", "Keep the toggle in settings too."} {
+		if !strings.Contains(ctxmd, want) {
+			t.Fatalf("context.md lacks %q:\n%s", want, ctxmd)
+		}
+	}
+	show := s.must("task", "show", "T-1", "--json")
+	if !strings.Contains(show, `"description": "Users want a dark theme.`) {
+		t.Fatalf("task show lacks the description:\n%s", show)
+	}
+	if out := s.fails(1, "task", "new", "--title", "x", "--source", "SPA-9"); out == "" {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestAttachKeepsFilesForTheHumans(t *testing.T) {
+	s := newSandbox(t)
+	s.must("init", "--stack", "generic")
+	s.must("task", "new", "--title", "Empty cart", "--description", "Show a message.")
+	shot := filepath.Join(t.TempDir(), "empty.png")
+	os.WriteFile(shot, []byte("\x89PNG fake"), 0o644)
+	if out := s.fails(1, "hand", "attach", shot); !strings.Contains(out, "usage") {
+		t.Fatalf("a note is required:\n%s", out)
+	}
+	out := s.must("hand", "attach", "--note", "The empty cart on the iPhone 17 Pro", shot, "--json")
+	if !strings.Contains(out, `"verdict": "pass"`) || !strings.Contains(out, "attach-1-empty.png") {
+		t.Fatalf("attach result:\n%s", out)
+	}
+	link := filepath.Join(t.TempDir(), "link.png")
+	os.Symlink(shot, link)
+	if out := s.fails(1, "hand", "attach", "--note", "x", link); !strings.Contains(out, "not a regular file") {
+		t.Fatalf("links must be refused:\n%s", out)
+	}
+	if show := s.must("task", "show", "T-1", "--json"); !strings.Contains(show, `"hand": "attach"`) {
+		t.Fatalf("the attachment is evidence of the task:\n%s", show)
 	}
 }

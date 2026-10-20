@@ -14,10 +14,11 @@ planned ──▶ approved ──▶ building ──▶ verified ──▶ revie
 
 | Hand | What it proves |
 |---|---|
-| `plan fetch` | The plan starts from the whole ticket, comments included (Linear, GitHub, file) |
+| `plan fetch` | The plan starts from the whole task, comments included — and from the linked Linear/GitHub ticket, if any |
 | `hand test-proof` | The tests pass with the change **and fail without it** |
 | `hand eyes` | The real screen matches its Figma node: pixel diff + every visible text |
 | `hand run <name>` | Any command (analyze, lint, build), run by Truehand, exit code recorded |
+| `hand attach` | Screenshots or files the agent looked at, kept on the task for the humans |
 | `review` | A review exists, by someone who did not work on the task |
 
 - **Agent-agnostic.** CLI + MCP server; a Claude Code plugin adds the locks.
@@ -53,11 +54,13 @@ Claude Code plugin (hooks, MCP tools, skills):
 cd your-repo
 truehand init                      # .truehand/config.yaml for your stack
 truehand hook install              # commit-msg + pre-push git hooks
-truehand task new SPA-123 --title "Login screen" --source linear:SPA-123
-truehand plan fetch                # context.md with the ticket and all comments + plan.md
+truehand task new --title "Login screen" --description "Email + password, remember me."
+                                   # → T-1; the task is the ticket. Linked tracker optional:
+                                   #   --source linear:SPA-123
+truehand plan fetch                # context.md with description and comments + plan.md
 # …the agent fills plan.md…
-truehand approve                   # you, in a terminal
-truehand task move approved && truehand task move building
+truehand approve                   # you: in the app or in a terminal → approved
+truehand task move building
 # …the agent builds, then runs the hands…
 truehand hand test-proof
 truehand hand run analyze

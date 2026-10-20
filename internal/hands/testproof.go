@@ -171,7 +171,7 @@ func TestProof(ctx context.Context, ws *core.Workspace, t *board.Task, o TestPro
 		// references new code, not that it checks behaviour: an assertion-free test passes.
 		s.Rec.Data["build_failure"] = BuildFailure(without.Output)
 		return s.Finish(evidence.Fail, fmt.Sprintf("without the change the tests do not compile (%s), so the proof cannot tell whether they check behaviour", BuildFailure(without.Output)),
-			"narrow commands.test_proof to tests that compile on the base (keep new APIs as stubs on the base, or use --only to revert just the implementation); or set tests.accept_build_failure: true for this repo, knowingly")
+			"revert only the implementation files whose tests still compile on the base (truehand_test_proof {only: [\"lib/x.dart\"]}, CLI: hand test-proof --only lib/x.dart). If no split works, ask the user to set commands.test_proof in .truehand/config.yaml: agents do not edit it")
 	default:
 		return s.Finish(evidence.Pass, fmt.Sprintf("tests pass with the change and fail without it (exit %d, %d file(s) reverted)", without.ExitCode, len(fix)), "")
 	}

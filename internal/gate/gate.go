@@ -122,7 +122,7 @@ func Validate(cfg *config.Config) error {
 
 // Evaluate runs every rule of the target state's gate.
 func Evaluate(e *Env, target board.State) Result {
-	res := Result{Task: e.Task.ID, Target: string(target), Pass: true}
+	res := Result{Task: e.Task.ID, Target: string(target), Pass: true, Items: []Item{}}
 	for _, r := range e.Config.Gates[string(target)] {
 		var it Item
 		if r.When != nil && len(r.When.Changed) > 0 && !e.touches(r.When.Changed) {
@@ -203,7 +203,7 @@ func checkHumanApproval(e *Env, _ config.Rule) Item {
 	if stale {
 		return fail("plan.md changed after the last approval: a human must run `truehand approve %s` again", e.Task.ID)
 	}
-	return fail("waiting for a human: run `truehand approve %s` in a terminal", e.Task.ID)
+	return fail("waiting for a human: Approve plan on the task in the Truehand app, or `truehand approve %s` in a terminal", e.Task.ID)
 }
 
 // checkHand requires the latest record of a hand (per key) to pass, be intact and be fresh.

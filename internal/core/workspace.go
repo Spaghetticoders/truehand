@@ -14,6 +14,7 @@ import (
 	"github.com/spaghetticoders/truehand/internal/config"
 	"github.com/spaghetticoders/truehand/internal/gate"
 	"github.com/spaghetticoders/truehand/internal/gitx"
+	"github.com/spaghetticoders/truehand/internal/tickets"
 )
 
 type Workspace struct {
@@ -105,6 +106,11 @@ func (w *Workspace) ResolveTask(id string) (*board.Task, error) {
 }
 
 func (w *Workspace) NewTask(id, title, source string, scope ...string) (*board.Task, error) {
+	if source != "" {
+		if adapter, _ := tickets.ParseRef(source, w.Config.Tickets.Adapter); adapter == "" {
+			return nil, fmt.Errorf("ticket %q has no tracker: write it as linear:%s, github:owner/repo#12 or file:brief.md, or set tickets.adapter in .truehand/config.yaml", source, source)
+		}
+	}
 	if ref := w.Config.Base; ref != "" && w.Repo.HasCommits() {
 		if _, err := w.Repo.Git("rev-parse", "--verify", "-q", ref+"^{commit}"); err != nil {
 			return nil, fmt.Errorf("base ref %q does not exist in this repo: set `base:` in .truehand/config.yaml to the branch tasks are measured against (e.g. main)", ref)
@@ -122,6 +128,18 @@ func (w *Workspace) NewTask(id, title, source string, scope ...string) (*board.T
 		return nil, err
 	}
 	return t, nil
+}
+
+// Comment appends a note to the task's log; the board shows it as the task's discussion.
+func (w *Workspace) Comment(id, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("empty comment")
+	}
+	if _, err := w.Store.Load(id); err != nil {
+		return err
+	}
+	return w.Store.AppendEvent(id, board.Event{Type: "comment", Actor: w.Actor(), Detail: map[string]any{"text": text}})
 }
 
 // BaseOf returns the commit a task's diff is measured against: the merge-base of HEAD with

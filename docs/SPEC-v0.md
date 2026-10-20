@@ -17,14 +17,15 @@ The agent (Claude Code, OpenClaw, Hermes, …) is the brain. Truehand provides:
 - Truehand never calls an LLM and never handles the user's Claude credentials. Anything that
   needs judgement is done by the user's agent, on the user's subscription.
 - No chat, no terminal, no agent runner in the GUI.
-- Not a project-management tool. Tickets stay in Linear/Jira/ClickUp; the board tracks the
-  engineering lifecycle of the work, not the backlog.
+- Not a full project-management tool (no sprints, estimates, assignments). A task *is* a
+  ticket — title, description, comments — so a repo needs nothing else; a task can also be
+  linked to a Linear/GitHub ticket, whose content then joins the plan context.
 
 ## 2. Concepts
 
 | Term | Meaning |
 |---|---|
-| Task | One unit of work (a ticket, a slice). Lives in `.truehand/tasks/<id>/` |
+| Task | One unit of work, and its ticket: title, `description.md`, comments. Lives in `.truehand/tasks/<id>/` |
 | State | `planned → approved → building → verified → reviewed → delivered` |
 | Gate | The rule set that must pass to enter a state. Defined in `.truehand/config.yaml` |
 | Evidence | Files produced by hands, recorded with hashes and the fingerprint of the content they ran on |
@@ -41,7 +42,8 @@ The files are the source of truth. Everything else (SQLite index, GUI, cloud) is
   config.yaml                 # gates, adapters, commands (test, build, analyze)
   tasks/
     SPA-123/
-      task.yaml               # id, title, source ticket, state, roles, timestamps
+      task.yaml               # id, title, optional external ticket, state, roles, timestamps
+      description.md          # what has to be done: the ticket (comments live in events.jsonl)
       plan.md                 # written by the agent, validated by the plan hand
       events.jsonl            # append-only log of transitions and hand runs
       evidence/

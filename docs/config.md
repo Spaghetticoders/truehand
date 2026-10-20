@@ -16,7 +16,10 @@ tests:
   globs: ["test/**", "**/*_test.dart"]   # what counts as test code (default covers most stacks)
   accept_build_failure: false      # true: "does not compile without the change" counts as a proof (weaker)
 
-tickets:
+tasks:
+  prefix: T                        # ids for tasks created without one: T-1, T-2, …
+
+tickets:                           # optional: external tracker for --source
   adapter: linear                  # linear (LINEAR_API_KEY) | github (gh CLI) | file
 
 locks:

@@ -48,7 +48,7 @@ func Template(stack, base string) (string, error) {
 #     when: { changed: ["%s"] }
 #     with: { max_delta_ratio: 0.02 }`, d.uiGlob)
 	}
-	return fmt.Sprintf(`# Truehand config. Docs: docs/SPEC-v0.md
+	return fmt.Sprintf(`# Truehand config. Every option: https://github.com/spaghetticoders/truehand/blob/main/docs/config.md
 version: 0
 
 # Branch the task diff is measured against (merge-base with HEAD).
@@ -58,8 +58,14 @@ commands:
   test: %q
   analyze: %q
 
-tickets:
-  adapter: linear
+# Task ids Truehand assigns when you create a task without one: T-1, T-2, ...
+tasks:
+  prefix: T
+
+# Optional: link tasks to an external tracker (task new --source linear:SPA-123) and
+# pull the ticket and its comments into the plan context.
+# tickets:
+#   adapter: linear        # linear (LINEAR_API_KEY) | github (gh CLI) | file
 %s
 gates:
   approved:

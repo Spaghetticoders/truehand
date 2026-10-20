@@ -15,6 +15,7 @@ type BoardTask struct {
 	*board.Task
 	Active  bool     `json:"active"`
 	Stale   bool     `json:"stale"`
+	Merged  bool     `json:"merged"`
 	Next    string   `json:"next,omitempty"`
 	Missing []string `json:"missing"`
 }
@@ -34,7 +35,7 @@ func (w *Workspace) Board() (*BoardView, error) {
 	v := &BoardView{Root: w.Repo.Root, Name: filepath.Base(w.Repo.Root), Tasks: []BoardTask{}}
 	active := w.ActiveTask()
 	for _, t := range tasks {
-		bt := BoardTask{Task: t, Active: t.ID == active, Stale: w.Stale(t), Missing: []string{}}
+		bt := BoardTask{Task: t, Active: t.ID == active, Stale: w.Stale(t), Merged: w.Merged(t), Missing: []string{}}
 		if next := t.State.Next(); next != "" {
 			bt.Next = string(next)
 			if res, err := w.Check(t, next); err == nil {
@@ -52,7 +53,9 @@ func (w *Workspace) Board() (*BoardView, error) {
 
 // PlanView is the plan as a reviewer sees it, with the hash an approval must name.
 type PlanView struct {
-	Exists   bool           `json:"exists"`
+	Exists bool `json:"exists"`
+	// Started is false while plan.md is still the untouched template.
+	Started  bool           `json:"started"`
 	Markdown string         `json:"markdown"`
 	SHA256   string         `json:"sha256,omitempty"`
 	Problems []plan.Problem `json:"problems"`
@@ -72,7 +75,8 @@ func (w *Workspace) Detail(t *board.Task) (*TaskDetail, error) {
 	}
 	d := &TaskDetail{TaskView: v, Plan: PlanView{Problems: []plan.Problem{}}, Events: []board.Event{}}
 	if b, err := os.ReadFile(w.Store.PlanPath(t.ID)); err == nil {
-		d.Plan = PlanView{Exists: true, Markdown: string(b), SHA256: evidence.HashBytes(b), Problems: plan.Check(string(b))}
+		probs := plan.Check(string(b))
+		d.Plan = PlanView{Exists: true, Markdown: string(b), SHA256: evidence.HashBytes(b), Problems: probs, Started: len(probs) < len(plan.Sections)}
 		if d.Plan.Problems == nil {
 			d.Plan.Problems = []plan.Problem{}
 		}

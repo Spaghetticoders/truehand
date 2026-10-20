@@ -21,6 +21,7 @@ type Config struct {
 	Version  int               `yaml:"version"`
 	Base     string            `yaml:"base,omitempty"`
 	Commands map[string]string `yaml:"commands,omitempty"`
+	Tasks    Tasks             `yaml:"tasks,omitempty"`
 	Tickets  Adapter           `yaml:"tickets,omitempty"`
 	Eyes     Eyes              `yaml:"eyes,omitempty"`
 	Tests    Tests             `yaml:"tests,omitempty"`
@@ -61,6 +62,18 @@ func (c *Config) CommitFrom() string {
 		return c.Locks.CommitFrom
 	}
 	return "reviewed"
+}
+
+type Tasks struct {
+	// Prefix of the ids Truehand assigns when a task is created without one.
+	Prefix string `yaml:"prefix,omitempty"`
+}
+
+func (c *Config) TaskPrefix() string {
+	if c.Tasks.Prefix != "" {
+		return c.Tasks.Prefix
+	}
+	return "T"
 }
 
 type Adapter struct {

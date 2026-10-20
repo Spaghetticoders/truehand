@@ -503,7 +503,9 @@ func TestApproveFromApp(t *testing.T) {
 	if !strings.Contains(out, `"via": "app+os-auth`) || !strings.Contains(out, `"sha256": "`+sha+`"`) {
 		t.Fatalf("approval and plan sha must be in the detail:\n%s", out)
 	}
-	s.must("task", "move", "approved")
+	if !strings.Contains(out, `"state": "approved"`) {
+		t.Fatalf("an approval from the app moves the task to approved:\n%s", out)
+	}
 }
 
 func TestBoardJSON(t *testing.T) {

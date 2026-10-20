@@ -31,7 +31,9 @@ var isTTY = func() bool {
 
 func init() {
 	register("init", "Create .truehand/config.yaml for this repo", cmdInit)
-	register("task new", "Create a task", cmdTaskNew)
+	register("task new", "Create a task (its description is the ticket; an external one is optional)", cmdTaskNew)
+	register("task edit", "Change a task's title, description or linked ticket", cmdTaskEdit)
+	register("task comment", "Add a comment to a task", cmdTaskComment)
 	register("task list", "List tasks and their state", cmdTaskList)
 	register("task show", "Show a task, its gate for the next state and its evidence", cmdTaskShow)
 	register("board", "Print the whole board of this repo (for apps; use --json)", cmdBoard)
@@ -42,6 +44,7 @@ func init() {
 	register("plan check", "Validate the structure of a task's plan.md", cmdPlanCheck)
 	register("approve", "Approve a task's plan (humans only: needs a terminal)", cmdApprove)
 	register("hand run", "Run a command as a hand and record its output as evidence", cmdHandRun)
+	register("hand attach", "Keep files (screenshots, recordings) on a task for the humans, with a note", cmdHandAttach)
 	register("review", "Record a review of the task (by someone other than the developer)", cmdReview)
 	register("evidence list", "List a task's evidence and whether it is still fresh", cmdEvidenceList)
 }
@@ -76,7 +79,8 @@ func cmdInit(c *ctx, args []string) error {
 	if err := os.WriteFile(p, []byte(tpl), 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.stdout, "Created %s (stack: %s)\nNext: truehand task new <id> --title \"...\"\n", filepath.Join(config.Dir, config.File), *stack)
+	fmt.Fprintf(c.stdout, "Created %s (stack: %s): check the test and analyze commands in it.\n", filepath.Join(config.Dir, config.File), *stack)
+	fmt.Fprintln(c.stdout, "Next: truehand hook install, commit .truehand/config.yaml, then truehand task new --title \"...\" --description \"...\"")
 	return nil
 }
 
@@ -109,7 +113,9 @@ func detectStack(root string) string {
 func cmdTaskNew(c *ctx, args []string) error {
 	fs := flag.NewFlagSet("task new", flag.ContinueOnError)
 	title := fs.String("title", "", "task title (required)")
-	source := fs.String("source", "", "ticket reference, e.g. linear:SPA-123")
+	desc := fs.String("description", "", "what has to be done, in markdown")
+	descFile := fs.String("description-file", "", "read the description from a file (- for stdin)")
+	source := fs.String("source", "", "optional external ticket, e.g. linear:SPA-123 or github:owner/repo#12")
 	scope := fs.String("scope", "", "comma-separated globs of the files this task owns (needed when tasks share a branch)")
 	use := fs.Bool("use", true, "make it the active task")
 	asJSON := fs.Bool("json", false, "JSON output")
@@ -117,15 +123,28 @@ func cmdTaskNew(c *ctx, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(pos) != 1 || *title == "" {
-		return errors.New("usage: truehand task new <id> --title \"...\" [--source linear:SPA-1]")
+	if len(pos) > 1 || *title == "" {
+		return errors.New("usage: truehand task new [<id>] --title \"...\" [--description \"...\"] [--source linear:SPA-1]")
+	}
+	text, err := readDescription(c, *desc, *descFile)
+	if err != nil {
+		return err
 	}
 	ws, err := c.workspace()
 	if err != nil {
 		return err
 	}
-	t, err := ws.NewTask(pos[0], *title, *source, splitGlobs(*scope)...)
+	id := ""
+	if len(pos) == 1 {
+		id = pos[0]
+	} else if id, err = ws.Store.NextID(ws.Config.TaskPrefix()); err != nil {
+		return err
+	}
+	t, err := ws.NewTask(id, *title, *source, splitGlobs(*scope)...)
 	if err != nil {
+		return err
+	}
+	if err := ws.Store.SetDescription(t.ID, text); err != nil {
 		return err
 	}
 	if *use {
@@ -136,8 +155,113 @@ func cmdTaskNew(c *ctx, args []string) error {
 	if *asJSON {
 		return printJSON(c.stdout, t)
 	}
-	fmt.Fprintf(c.stdout, "Created %s (%s), base %s\nNext: truehand plan init %s\n", t.ID, t.State, shortSHA(t.Base), t.ID)
+	fmt.Fprintf(c.stdout, "Created %s (%s), base %s\n", t.ID, t.State, shortSHA(t.Base))
+	if text == "" && t.Source == "" {
+		fmt.Fprintf(c.stdout, "Next: describe it with truehand task edit %s --description \"...\"\n", t.ID)
+	} else {
+		fmt.Fprintf(c.stdout, "Next: truehand plan fetch --task %s\n", t.ID)
+	}
 	return nil
+}
+
+func cmdTaskEdit(c *ctx, args []string) error {
+	fs := flag.NewFlagSet("task edit", flag.ContinueOnError)
+	title := fs.String("title", "", "new title")
+	desc := fs.String("description", "", "new description, in markdown (replaces the old one)")
+	descFile := fs.String("description-file", "", "read the new description from a file (- for stdin)")
+	source := fs.String("source", "", "link an external ticket (\"none\" removes the link)")
+	asJSON := fs.Bool("json", false, "JSON output")
+	pos, _, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if len(pos) != 1 || (*title == "" && !set["description"] && *descFile == "" && *source == "") {
+		return errors.New("usage: truehand task edit <id> [--title \"...\"] [--description \"...\"] [--source linear:SPA-1|none]")
+	}
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	t, err := ws.Store.Load(pos[0])
+	if err != nil {
+		return err
+	}
+	changed := []string{}
+	if set["description"] || *descFile != "" {
+		text, err := readDescription(c, *desc, *descFile)
+		if err != nil {
+			return err
+		}
+		if err := ws.Store.SetDescription(t.ID, text); err != nil {
+			return err
+		}
+		changed = append(changed, "description")
+	}
+	if *title != "" && *title != t.Title {
+		t.Title = *title
+		changed = append(changed, "title")
+	}
+	switch *source {
+	case "":
+	case "none":
+		t.Source = ""
+		changed = append(changed, "source")
+	default:
+		t.Source = *source
+		changed = append(changed, "source")
+	}
+	if len(changed) > 0 {
+		t.Updated = time.Now().UTC()
+		if err := ws.Store.Save(t); err != nil {
+			return err
+		}
+		_ = ws.Store.AppendEvent(t.ID, board.Event{Type: "edited", Actor: ws.Actor(), Detail: map[string]any{"fields": changed}})
+	}
+	if *asJSON {
+		return printJSON(c.stdout, t)
+	}
+	fmt.Fprintf(c.stdout, "Updated %s\n", t.ID)
+	return nil
+}
+
+func cmdTaskComment(c *ctx, args []string) error {
+	fs := flag.NewFlagSet("task comment", flag.ContinueOnError)
+	pos, tail, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 1 && len(tail) > 0 {
+		pos = append(pos, strings.Join(tail, " "))
+	}
+	if len(pos) != 2 {
+		return errors.New("usage: truehand task comment <id> \"text\"  (or <id> -- text)")
+	}
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	if err := ws.Comment(pos[0], pos[1]); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.stdout, "Commented on %s\n", pos[0])
+	return nil
+}
+
+func readDescription(c *ctx, text, file string) (string, error) {
+	switch {
+	case file == "":
+		return text, nil
+	case text != "":
+		return "", errors.New("pass --description or --description-file, not both")
+	case file == "-":
+		b, err := io.ReadAll(c.stdin)
+		return string(b), err
+	default:
+		b, err := os.ReadFile(file)
+		return string(b), err
+	}
 }
 
 func cmdTaskList(c *ctx, args []string) error {
@@ -218,6 +342,16 @@ func cmdTaskShow(c *ctx, args []string) error {
 	}
 	for role, who := range t.Roles {
 		fmt.Fprintf(c.stdout, "  %s: %s\n", role, who)
+	}
+	if v.Description != "" {
+		fmt.Fprintf(c.stdout, "\nDescription:\n%s\n", indent(strings.TrimSpace(v.Description), "  "))
+	}
+	if len(v.Comments) > 0 {
+		fmt.Fprintf(c.stdout, "\nComments (%d):\n", len(v.Comments))
+		for _, cm := range v.Comments {
+			text, _ := cm.Detail["text"].(string)
+			fmt.Fprintf(c.stdout, "  %s — %s\n%s\n", cm.Actor, cm.Time.Local().Format("01-02 15:04"), indent(strings.TrimSpace(text), "    "))
+		}
 	}
 	if v.NextGate != nil {
 		fmt.Fprintln(c.stdout)
@@ -495,7 +629,15 @@ func cmdApprove(c *ctx, args []string) error {
 		return err
 	}
 	_ = ws.Store.AppendEvent(t.ID, board.Event{Type: "approved", Actor: "human:" + a.Email})
-	fmt.Fprintf(c.stdout, "Approved. Next: truehand task move %s approved\n", t.ID)
+	if t.State == board.Planned {
+		if _, err := ws.Move(t, board.Approved); err != nil {
+			fmt.Fprintf(c.stdout, "Approved, but the task did not move: %v\nNext: truehand task move %s approved\n", err, t.ID)
+			return nil
+		}
+		fmt.Fprintf(c.stdout, "Approved: %s is now approved. The agent can build.\n", t.ID)
+		return nil
+	}
+	fmt.Fprintln(c.stdout, "Approved.")
 	return nil
 }
 
@@ -525,6 +667,38 @@ func cmdHandRun(c *ctx, args []string) error {
 		tee = c.stderr
 	}
 	res, err := hands.Run(context.Background(), ws, t, pos[0], strings.Join(tail, " "), *timeout, tee)
+	if err != nil {
+		return err
+	}
+	return printHand(c, res, *asJSON)
+}
+
+func cmdHandAttach(c *ctx, args []string) error {
+	fs := flag.NewFlagSet("hand attach", flag.ContinueOnError)
+	task := fs.String("task", "", "task id (default: active task)")
+	note := fs.String("note", "", "what the files show (required)")
+	asJSON := fs.Bool("json", false, "JSON output")
+	pos, _, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 0 || *note == "" {
+		return errors.New("usage: truehand hand attach --note \"what they show\" <file>... [--task id]")
+	}
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	t, err := ws.ResolveTask(*task)
+	if err != nil {
+		return err
+	}
+	for i, p := range pos {
+		if !filepath.IsAbs(p) {
+			pos[i] = filepath.Join(c.dir, p)
+		}
+	}
+	res, err := hands.Attach(ws, t, *note, pos)
 	if err != nil {
 		return err
 	}
@@ -680,4 +854,8 @@ func shortSHA(s string) string {
 		return s[:10]
 	}
 	return s
+}
+
+func indent(text, prefix string) string {
+	return prefix + strings.ReplaceAll(text, "\n", "\n"+prefix)
 }

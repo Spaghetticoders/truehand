@@ -27,10 +27,17 @@ type TaskArg struct {
 }
 
 type newTaskArgs struct {
-	ID     string   `json:"id" jsonschema:"task id, e.g. the ticket id SPA-123"`
-	Title  string   `json:"title" jsonschema:"short title"`
-	Source string   `json:"source,omitempty" jsonschema:"ticket reference, e.g. linear:SPA-123 or github:owner/repo#12"`
-	Scope  []string `json:"scope,omitempty" jsonschema:"globs of the files this task owns; needed when several tasks share a branch"`
+	ID          string   `json:"id,omitempty" jsonschema:"task id; omit to get the next free one (e.g. T-4)"`
+	Title       string   `json:"title" jsonschema:"short title"`
+	Description string   `json:"description,omitempty" jsonschema:"what has to be done and why, in markdown: this is the ticket"`
+	Source      string   `json:"source,omitempty" jsonschema:"optional external ticket, e.g. linear:SPA-123 or github:owner/repo#12"`
+	Scope       []string `json:"scope,omitempty" jsonschema:"globs of the files this task owns; needed when several tasks share a branch"`
+}
+
+type commentArgs struct {
+	TaskArg
+	Body string `json:"body,omitempty" jsonschema:"the comment, in markdown"`
+	Text string `json:"text,omitempty" jsonschema:"same as body"`
 }
 
 type moveArgs struct {
@@ -45,7 +52,7 @@ type gateArgs struct {
 
 type fetchArgs struct {
 	TaskArg
-	Ref string `json:"ref,omitempty" jsonschema:"ticket reference; defaults to the task source"`
+	Ref string `json:"ref,omitempty" jsonschema:"external ticket reference; defaults to the task source, if any"`
 }
 
 type runArgs struct {
@@ -73,6 +80,12 @@ type reviewArgs struct {
 	Notes   string `json:"notes" jsonschema:"the review in markdown: what was read, what was run, findings"`
 }
 
+type attachArgs struct {
+	TaskArg
+	Files []string `json:"files" jsonschema:"paths of the files to keep (screenshots, recordings, reports); relative to the repo root or absolute"`
+	Note  string   `json:"note" jsonschema:"what the files show, in markdown"`
+}
+
 // New builds the server. version is reported to clients.
 func New(open Opener, version string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "truehand", Version: version}, &mcp.ServerOptions{
@@ -94,12 +107,34 @@ func New(open Opener, version string) *mcp.Server {
 		return ws.View(t)
 	}, open)
 
-	tool(s, "truehand_task_new", "Create a task (state planned) and make it active.", func(ctx context.Context, ws *core.Workspace, a newTaskArgs) (any, error) {
-		t, err := ws.NewTask(a.ID, a.Title, a.Source, a.Scope...)
+	tool(s, "truehand_task_new", "Create a task (state planned) and make it active. The description is the ticket; source links an external one.", func(ctx context.Context, ws *core.Workspace, a newTaskArgs) (any, error) {
+		id := a.ID
+		if id == "" {
+			var err error
+			if id, err = ws.Store.NextID(ws.Config.TaskPrefix()); err != nil {
+				return nil, err
+			}
+		}
+		t, err := ws.NewTask(id, a.Title, a.Source, a.Scope...)
 		if err != nil {
 			return nil, err
 		}
+		if err := ws.Store.SetDescription(t.ID, a.Description); err != nil {
+			return nil, err
+		}
 		return t, ws.SetActiveTask(t.ID)
+	}, open)
+
+	tool(s, "truehand_task_comment", "Add a comment to the task: open questions for the human, decisions, findings.", func(ctx context.Context, ws *core.Workspace, a commentArgs) (any, error) {
+		t, err := ws.ResolveTask(a.Task)
+		if err != nil {
+			return nil, err
+		}
+		body := a.Body
+		if body == "" {
+			body = a.Text
+		}
+		return map[string]any{"commented": true}, ws.Comment(t.ID, body)
 	}, open)
 
 	tool(s, "truehand_task_move", "Move a task to a state. Forward moves go one step at a time and only if the gate passes; the result lists every check.", func(ctx context.Context, ws *core.Workspace, a moveArgs) (any, error) {
@@ -139,7 +174,7 @@ func New(open Opener, version string) *mcp.Server {
 		return ws.Check(t, target)
 	}, open)
 
-	tool(s, "truehand_plan_fetch", "Fetch the task's ticket with all comments into context.md and create the plan.md template.", func(ctx context.Context, ws *core.Workspace, a fetchArgs) (any, error) {
+	tool(s, "truehand_plan_fetch", "Write context.md (the task description and comments, plus the linked external ticket if any) and create the plan.md template.", func(ctx context.Context, ws *core.Workspace, a fetchArgs) (any, error) {
 		t, err := ws.ResolveTask(a.Task)
 		if err != nil {
 			return nil, err
@@ -193,6 +228,14 @@ func New(open Opener, version string) *mcp.Server {
 			return nil, err
 		}
 		return hands.Review(ws, t, a.Verdict, []byte(a.Notes))
+	}, open)
+
+	tool(s, "truehand_attach", "Keep screenshots or other files on the task as evidence for the humans (they see them on the board), with a note on what they show.", func(ctx context.Context, ws *core.Workspace, a attachArgs) (any, error) {
+		t, err := ws.ResolveTask(a.Task)
+		if err != nil {
+			return nil, err
+		}
+		return hands.Attach(ws, t, a.Note, a.Files)
 	}, open)
 
 	return s

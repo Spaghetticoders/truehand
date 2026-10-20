@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spaghetticoders/truehand/internal/core"
 )
 
 // deliveredBranch runs the full lifecycle of T-1 on branch feat/greet and commits everything.
@@ -22,7 +24,6 @@ func deliveredBranch(t *testing.T) *sandbox {
 	if code, out := s.run("T-1\n", "approve"); code != 0 {
 		t.Fatal(out)
 	}
-	s.must("task", "move", "approved")
 	t.Setenv("TRUEHAND_ACTOR", "agent:dev")
 	s.must("task", "move", "building")
 	s.write("greet.txt", "hi\n")
@@ -207,5 +208,27 @@ func TestCIVerifyUncoveredEarlierCommit(t *testing.T) {
 	out := s.fails(3, "ci", "verify", "--base", "main")
 	if !strings.Contains(out, "early.txt") || !strings.Contains(out, "not covered") {
 		t.Fatalf("expected early.txt uncovered:\n%s", out)
+	}
+}
+
+func TestMergedTaskIsDoneNotStale(t *testing.T) {
+	s := deliveredBranch(t)
+	board := func() core.BoardTask {
+		var b core.BoardView
+		if err := json.Unmarshal([]byte(s.must("board")), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b.Tasks[0]
+	}
+	if bt := board(); bt.Merged || bt.Stale {
+		t.Fatalf("on its branch T-1 is neither merged nor stale: %+v", bt)
+	}
+	s.git("checkout", "-q", "main")
+	s.git("merge", "-q", "--no-ff", "-m", "Merge branch 'feat/greet'", "feat/greet")
+	s.write("later.txt", "another task's work\n")
+	s.git("add", "later.txt")
+	s.git("commit", "-q", "-m", "feat: later work")
+	if bt := board(); !bt.Merged || bt.Stale {
+		t.Fatalf("once merged, later commits must not make T-1 stale: %+v", bt)
 	}
 }
