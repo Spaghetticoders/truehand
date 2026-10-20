@@ -436,3 +436,35 @@ func TestStopExplainsBrokenConfig(t *testing.T) {
 		t.Fatalf("never block twice: %s", out)
 	}
 }
+
+// Tasks sharing a branch stay independent when they declare their files.
+func TestScopedTasksShareABranch(t *testing.T) {
+	s := proofSandbox(t, "sh test/check.sh")
+	s.write("lib/other.txt", "v1\n")
+	s.git("add", ".")
+	s.git("commit", "-q", "-m", "chore: other")
+	s.must("task", "new", "T-A", "--title", "a", "--scope", "lib/code.txt,test/check.sh")
+	s.write("lib/code.txt", "fixed\n")
+	s.write("test/check.sh", "grep -q fixed lib/code.txt\n")
+	s.must("hand", "test-proof", "--quiet")
+	s.git("add", ".")
+	s.git("commit", "-q", "-m", "fix: code")
+
+	// Another task's work on the same branch, committed or not, does not touch T-A.
+	s.must("task", "new", "T-B", "--title", "b", "--scope", "lib/other.txt")
+	s.write("lib/other.txt", "v2\n")
+	s.write("lib/new.txt", "x\n")
+	out := s.must("evidence", "list", "T-A")
+	if strings.Contains(out, "STALE") {
+		t.Fatalf("T-A's evidence must ignore files outside its scope:\n%s", out)
+	}
+	// test-proof reverts only the scope: lib/new.txt must survive and not break the run.
+	s.must("task", "use", "T-A")
+	out = s.must("hand", "test-proof", "--quiet")
+	if !strings.Contains(out, "1 file(s) reverted") {
+		t.Fatalf("only the scoped fix should be reverted:\n%s", out)
+	}
+	if readFile(t, filepath.Join(s.dir, "lib/new.txt")) != "x\n" {
+		t.Fatal("files outside the scope must not be touched")
+	}
+}

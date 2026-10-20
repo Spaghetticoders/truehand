@@ -104,7 +104,7 @@ func (w *Workspace) ResolveTask(id string) (*board.Task, error) {
 	return w.Store.Load(id)
 }
 
-func (w *Workspace) NewTask(id, title, source string) (*board.Task, error) {
+func (w *Workspace) NewTask(id, title, source string, scope ...string) (*board.Task, error) {
 	if ref := w.Config.Base; ref != "" && w.Repo.HasCommits() {
 		if _, err := w.Repo.Git("rev-parse", "--verify", "-q", ref+"^{commit}"); err != nil {
 			return nil, fmt.Errorf("base ref %q does not exist in this repo: set `base:` in .truehand/config.yaml to the branch tasks are measured against (e.g. main)", ref)
@@ -113,7 +113,7 @@ func (w *Workspace) NewTask(id, title, source string) (*board.Task, error) {
 	now := time.Now().UTC()
 	t := &board.Task{
 		ID: id, Title: title, Source: source, State: board.Planned,
-		Base: w.Repo.Base(w.Config.Base), BaseRef: w.Config.Base, Created: now, Updated: now,
+		Base: w.Repo.Base(w.Config.Base), BaseRef: w.Config.Base, Scope: scope, Created: now, Updated: now,
 	}
 	if err := w.Store.Create(t); err != nil {
 		return nil, err

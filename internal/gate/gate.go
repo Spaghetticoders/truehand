@@ -54,7 +54,7 @@ func NewEnv(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Ta
 	if err != nil {
 		return nil, err
 	}
-	fp, err := evidence.Compute(repo, base)
+	fp, err := evidence.Compute(repo, base, t.Scope)
 	if err != nil {
 		return nil, err
 	}

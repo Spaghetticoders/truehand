@@ -79,6 +79,14 @@ gates:
 | `evidence_matches_head` | `evidence_fresh`, and no task file has uncommitted changes (the default for `delivered`) |
 | `conventional_commits` | every commit since the task base is `type(scope): summary` |
 
+## Task scope
+
+`truehand task new <id> --scope "lib/auth/**,test/auth/**"` declares the files a task owns.
+Without a scope a task owns every file changed since its base, which is right for one branch
+per task. When several tasks share a branch (trunk-based work), give each a scope: its
+fingerprint, `test-proof` reverts, `when.changed` rules and CI coverage then consider only
+its files, and the other tasks' work never makes its evidence stale.
+
 ## Identity
 
 The actor of a command is the Claude Code session the process descends from

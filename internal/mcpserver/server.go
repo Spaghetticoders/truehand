@@ -27,9 +27,10 @@ type TaskArg struct {
 }
 
 type newTaskArgs struct {
-	ID     string `json:"id" jsonschema:"task id, e.g. the ticket id SPA-123"`
-	Title  string `json:"title" jsonschema:"short title"`
-	Source string `json:"source,omitempty" jsonschema:"ticket reference, e.g. linear:SPA-123 or github:owner/repo#12"`
+	ID     string   `json:"id" jsonschema:"task id, e.g. the ticket id SPA-123"`
+	Title  string   `json:"title" jsonschema:"short title"`
+	Source string   `json:"source,omitempty" jsonschema:"ticket reference, e.g. linear:SPA-123 or github:owner/repo#12"`
+	Scope  []string `json:"scope,omitempty" jsonschema:"globs of the files this task owns; needed when several tasks share a branch"`
 }
 
 type moveArgs struct {
@@ -94,7 +95,7 @@ func New(open Opener, version string) *mcp.Server {
 	}, open)
 
 	tool(s, "truehand_task_new", "Create a task (state planned) and make it active.", func(ctx context.Context, ws *core.Workspace, a newTaskArgs) (any, error) {
-		t, err := ws.NewTask(a.ID, a.Title, a.Source)
+		t, err := ws.NewTask(a.ID, a.Title, a.Source, a.Scope...)
 		if err != nil {
 			return nil, err
 		}

@@ -73,8 +73,10 @@ type Task struct {
 	State  State  `yaml:"state" json:"state"`
 	// Base is the commit the task started from; BaseRef the branch its diff is measured
 	// against. The effective base is recomputed from BaseRef on every check (see core).
-	Base    string            `yaml:"base" json:"base"`
-	BaseRef string            `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	Base    string `yaml:"base" json:"base"`
+	BaseRef string `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	// Scope lists the globs of the files this task owns; empty means every changed file.
+	Scope   []string          `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Roles   map[string]string `yaml:"roles,omitempty" json:"roles,omitempty"`
 	Created time.Time         `yaml:"created" json:"created"`
 	Updated time.Time         `yaml:"updated" json:"updated"`

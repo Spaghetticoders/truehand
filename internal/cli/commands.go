@@ -109,6 +109,7 @@ func cmdTaskNew(c *ctx, args []string) error {
 	fs := flag.NewFlagSet("task new", flag.ContinueOnError)
 	title := fs.String("title", "", "task title (required)")
 	source := fs.String("source", "", "ticket reference, e.g. linear:SPA-123")
+	scope := fs.String("scope", "", "comma-separated globs of the files this task owns (needed when tasks share a branch)")
 	use := fs.Bool("use", true, "make it the active task")
 	asJSON := fs.Bool("json", false, "JSON output")
 	pos, _, err := parse(fs, args)
@@ -122,7 +123,7 @@ func cmdTaskNew(c *ctx, args []string) error {
 	if err != nil {
 		return err
 	}
-	t, err := ws.NewTask(pos[0], *title, *source)
+	t, err := ws.NewTask(pos[0], *title, *source, splitGlobs(*scope)...)
 	if err != nil {
 		return err
 	}
@@ -202,6 +203,9 @@ func cmdTaskShow(c *ctx, args []string) error {
 	fmt.Fprintf(c.stdout, "%s — %s\n  state:  %s\n  base:   %s\n", t.ID, t.Title, t.State, shortSHA(t.Base))
 	if t.Source != "" {
 		fmt.Fprintf(c.stdout, "  source: %s\n", t.Source)
+	}
+	if len(t.Scope) > 0 {
+		fmt.Fprintf(c.stdout, "  scope:  %s\n", strings.Join(t.Scope, ", "))
 	}
 	for role, who := range t.Roles {
 		fmt.Fprintf(c.stdout, "  %s: %s\n", role, who)
@@ -617,6 +621,16 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+func splitGlobs(s string) []string {
+	var out []string
+	for _, g := range strings.Split(s, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 func first(s []string) string {

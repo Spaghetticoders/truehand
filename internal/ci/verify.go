@@ -114,7 +114,7 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 			if err != nil {
 				return nil, err
 			}
-			fp, err := evidence.Compute(ws.Repo, base)
+			fp, err := evidence.Compute(ws.Repo, base, t.Scope)
 			if err != nil {
 				return nil, err
 			}

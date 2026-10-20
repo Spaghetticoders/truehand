@@ -16,6 +16,7 @@ import (
 
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/gitx"
+	"github.com/spaghetticoders/truehand/internal/glob"
 )
 
 const (
@@ -54,10 +55,21 @@ type Record struct {
 // the fingerprint every time evidence is written.
 var ExcludedPaths = []string{".truehand"}
 
-func Compute(repo *gitx.Repo, base string) (Fingerprint, error) {
-	files, err := repo.ChangedFiles(base, ExcludedPaths...)
+// Compute fingerprints the task's files. With a scope, only changed files matching it count:
+// several tasks can then share a branch without their changes leaking into each other.
+func Compute(repo *gitx.Repo, base string, scope []string) (Fingerprint, error) {
+	all, err := repo.ChangedFiles(base, ExcludedPaths...)
 	if err != nil {
 		return Fingerprint{}, err
+	}
+	files := all
+	if len(scope) > 0 {
+		files = nil
+		for _, f := range all {
+			if glob.MatchAny(scope, f) {
+				files = append(files, f)
+			}
+		}
 	}
 	hashes, err := repo.HashFiles(files)
 	if err != nil {

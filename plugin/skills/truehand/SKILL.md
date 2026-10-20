@@ -16,7 +16,8 @@ Use the MCP tools (`truehand_*`) or the CLI (`truehand …`); they are the same 
 ## 1. Task and plan
 
 - One task per ticket or slice: `truehand_task_new {id, title, source}` (source like
-  `linear:SPA-123`). It becomes the active task.
+  `linear:SPA-123`). It becomes the active task. Work on a branch per task; if tasks must
+  share a branch, pass `scope` (globs of the files the task owns).
 - `truehand_plan_fetch` writes `context.md` with the ticket **and all its comments** —
   comments carry the course corrections the description lacks. Read it all.
 - Check whether the work is already done before planning: a grep is cheaper than a plan.

@@ -52,7 +52,7 @@ func Begin(ws *core.Workspace, t *board.Task, hand, key string) (*Session, error
 	if err != nil {
 		return nil, err
 	}
-	fp, err := evidence.Compute(ws.Repo, base)
+	fp, err := evidence.Compute(ws.Repo, base, t.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (s *Session) WriteFile(name string, b []byte) error {
 // while the hand ran, because the evidence would describe content that no longer exists.
 func (s *Session) Finish(verdict, summary, next string) (*Result, error) {
 	if verdict == evidence.Pass {
-		after, err := evidence.Compute(s.WS.Repo, s.Base)
+		after, err := evidence.Compute(s.WS.Repo, s.Base, s.Task.Scope)
 		if err != nil {
 			return nil, err
 		}
