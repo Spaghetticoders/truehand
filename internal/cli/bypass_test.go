@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -467,4 +469,56 @@ func TestScopedTasksShareABranch(t *testing.T) {
 	if readFile(t, filepath.Join(s.dir, "lib/new.txt")) != "x\n" {
 		t.Fatal("files outside the scope must not be touched")
 	}
+}
+
+// App approvals skip the terminal confirmation but never the identity checks or the OS auth.
+func TestApproveFromApp(t *testing.T) {
+	s := newSandbox(t)
+	s.must("init", "--stack", "generic")
+	s.write(".truehand/config.yaml", "version: 0\ngates:\n  approved:\n    - check: human_approval\n")
+	s.must("task", "new", "T-1", "--title", "x")
+	s.write(".truehand/tasks/T-1/plan.md", validPlan)
+	withTTY(t, false)
+	sha := sha256hex(validPlan)
+
+	if code, out := s.run("", "approve", "T-1", "--plan-sha", "deadbeef"); code == 0 || !strings.Contains(out, "changed since it was shown") {
+		t.Fatalf("a different plan must not be approved: %d\n%s", code, out)
+	}
+	old := core.AgentDetector
+	core.AgentDetector = func() int { return 4242 }
+	code, out := s.run("", "approve", "T-1", "--plan-sha", sha)
+	core.AgentDetector = old
+	if code == 0 {
+		t.Fatalf("app approval inside an agent session must fail:\n%s", out)
+	}
+	oldAuth := humanauth.Authenticate
+	humanauth.Authenticate = func(string) error { return errors.New("authentication cancelled") }
+	code, _ = s.run("", "approve", "T-1", "--plan-sha", sha)
+	humanauth.Authenticate = oldAuth
+	if code == 0 {
+		t.Fatal("app approval without OS auth must fail")
+	}
+	s.must("approve", "T-1", "--plan-sha", sha)
+	out = s.must("task", "show", "T-1", "--json", "--full")
+	if !strings.Contains(out, `"via": "app+os-auth`) || !strings.Contains(out, `"sha256": "`+sha+`"`) {
+		t.Fatalf("approval and plan sha must be in the detail:\n%s", out)
+	}
+	s.must("task", "move", "approved")
+}
+
+func TestBoardJSON(t *testing.T) {
+	s := bypassSandbox(t)
+	out := s.must("board")
+	var b core.BoardView
+	if err := json.Unmarshal([]byte(out), &b); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Tasks) != 1 || b.Tasks[0].ID != "T-1" || b.Tasks[0].Next != "building" || !b.Tasks[0].Active {
+		t.Fatalf("unexpected board: %+v", b)
+	}
+}
+
+func sha256hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }

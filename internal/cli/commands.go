@@ -34,6 +34,7 @@ func init() {
 	register("task new", "Create a task", cmdTaskNew)
 	register("task list", "List tasks and their state", cmdTaskList)
 	register("task show", "Show a task, its gate for the next state and its evidence", cmdTaskShow)
+	register("board", "Print the whole board of this repo (for apps; use --json)", cmdBoard)
 	register("task use", "Set the active task for this clone", cmdTaskUse)
 	register("task move", "Move a task to a state (forward moves must pass the gate)", cmdTaskMove)
 	register("gate check", "Evaluate a gate without moving the task", cmdGateCheck)
@@ -181,6 +182,7 @@ func cmdTaskList(c *ctx, args []string) error {
 func cmdTaskShow(c *ctx, args []string) error {
 	fs := flag.NewFlagSet("task show", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "JSON output")
+	full := fs.Bool("full", false, "with --json: include the plan and the event log")
 	pos, _, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -192,6 +194,13 @@ func cmdTaskShow(c *ctx, args []string) error {
 	t, err := ws.ResolveTask(first(pos))
 	if err != nil {
 		return err
+	}
+	if *asJSON && *full {
+		d, err := ws.Detail(t)
+		if err != nil {
+			return err
+		}
+		return printJSON(c.stdout, d)
 	}
 	v, err := ws.View(t)
 	if err != nil {
@@ -219,6 +228,23 @@ func cmdTaskShow(c *ctx, args []string) error {
 		printEvidence(c.stdout, v.Evidence)
 	}
 	return nil
+}
+
+func cmdBoard(c *ctx, args []string) error {
+	fs := flag.NewFlagSet("board", flag.ContinueOnError)
+	fs.Bool("json", true, "JSON output (the only format)")
+	if _, _, err := parse(fs, args); err != nil {
+		return err
+	}
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	b, err := ws.Board()
+	if err != nil {
+		return err
+	}
+	return printJSON(c.stdout, b)
 }
 
 func cmdTaskUse(c *ctx, args []string) error {
@@ -417,6 +443,7 @@ func cmdPlanCheck(c *ctx, args []string) error {
 
 func cmdApprove(c *ctx, args []string) error {
 	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
+	planSHA := fs.String("plan-sha", "", "approve from an app that showed the plan: the sha256 of the plan the user read (skips the terminal confirmation, never the OS authentication)")
 	pos, _, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -432,7 +459,7 @@ func cmdApprove(c *ctx, args []string) error {
 	if ws.InAgentSession() || os.Getenv("TRUEHAND_ACTOR") != "" {
 		return errors.New("approval runs in your own terminal, not inside an agent session (or with TRUEHAND_ACTOR set). Agents cannot approve")
 	}
-	if !isTTY() {
+	if *planSHA == "" && !isTTY() {
 		return errors.New("approval needs a human at a terminal (stdin is not a TTY). Agents cannot approve")
 	}
 	b, err := os.ReadFile(ws.Store.PlanPath(t.ID))
@@ -442,10 +469,18 @@ func cmdApprove(c *ctx, args []string) error {
 	if probs := plan.Check(string(b)); len(probs) > 0 {
 		return fmt.Errorf("plan.md is incomplete (%d problem(s)): run `truehand plan check %s`", len(probs), t.ID)
 	}
-	fmt.Fprintf(c.stdout, "%s\n\nApprove this plan for %s? Type the task id to confirm: ", strings.TrimSpace(string(b)), t.ID)
-	line, _ := bufio.NewReader(c.stdin).ReadString('\n')
-	if strings.TrimSpace(line) != t.ID {
-		return errors.New("not approved")
+	via := humanauth.Method()
+	if *planSHA != "" {
+		if *planSHA != evidence.HashBytes(b) {
+			return errors.New("plan.md changed since it was shown: reload it and read it again")
+		}
+		via = "app+" + via
+	} else {
+		fmt.Fprintf(c.stdout, "%s\n\nApprove this plan for %s? Type the task id to confirm: ", strings.TrimSpace(string(b)), t.ID)
+		line, _ := bufio.NewReader(c.stdin).ReadString('\n')
+		if strings.TrimSpace(line) != t.ID {
+			return errors.New("not approved")
+		}
 	}
 	// The process-tree and TTY checks stop honest mistakes; the OS dialog is what an agent
 	// cannot pass, since it needs the user's password or fingerprint.
@@ -454,7 +489,7 @@ func cmdApprove(c *ctx, args []string) error {
 	}
 	a := board.Approval{
 		State: board.Approved, Name: ws.Repo.ConfigValue("user.name"), Email: ws.Repo.ConfigValue("user.email"),
-		PlanSHA: evidence.HashBytes(b), Via: humanauth.Method(),
+		PlanSHA: evidence.HashBytes(b), Via: via,
 	}
 	if err := ws.Store.AppendApproval(t.ID, a); err != nil {
 		return err
