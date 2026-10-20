@@ -77,12 +77,6 @@ func CheckWrite(ws *core.Workspace, path string) Decision {
 	return allow()
 }
 
-var readOnlyCmds = map[string]bool{
-	"cat": true, "ls": true, "head": true, "tail": true, "grep": true, "rg": true, "less": true,
-	"wc": true, "jq": true, "diff": true, "file": true, "stat": true, "find": true, "git": true,
-	"truehand": true, "echo": true, "test": true, "[": true,
-}
-
 // CheckBash guards shell commands.
 // approveRe catches truehand approve wherever it appears: behind sh -c, go run, a path.
 var approveRe = regexp.MustCompile(`truehand\S*\s+approve\b`)
@@ -95,7 +89,15 @@ func checkBash(ws *core.Workspace, cwd, line string, depth int) Decision {
 	if approveRe.MatchString(line) {
 		return deny("approvals are for humans. Ask the user to run `truehand approve` in their terminal or approve from the Truehand app")
 	}
-	for _, raw := range segments(line) {
+	segs := segments(line)
+	for _, raw := range segs {
+		// An interpreter's script (inline or a heredoc) is opaque: any mention of truehand's
+		// own files is refused, since what the script does with them cannot be seen.
+		if words := stripEnv(raw); len(words) > 0 && interpreters[filepath.Base(words[0])] && protectedRe.MatchString(line) {
+			return deny("`%s` scripts may not touch truehand's files (config.yaml, task.yaml, events, approvals, evidence). Read them with `truehand task show --json` or cat; edit plan.md with the editor; config.yaml is for humans", words[0])
+		}
+	}
+	for _, raw := range segs {
 		words := stripEnv(raw)
 		if len(words) == 0 {
 			continue
@@ -181,17 +183,23 @@ func checkCommitState(ws *core.Workspace) Decision {
 	return allow()
 }
 
+var interpreters = map[string]bool{
+	"python": true, "python3": true, "node": true, "ruby": true, "perl": true, "php": true, "deno": true, "bun": true, "osascript": true,
+}
+
+var protectedRe = regexp.MustCompile(`\.truehand/(config\.ya?ml|tasks/[^/\s'"]+/(task\.yaml|events\.jsonl|approvals\.jsonl|evidence))`)
+
 var writeCmds = map[string]bool{
 	"cp": true, "mv": true, "rm": true, "tee": true, "truncate": true, "touch": true, "dd": true,
 	"sed": true, "perl": true, "python": true, "python3": true, "ruby": true, "node": true, "install": true, "ln": true, "chmod": true,
 }
 
 func checkShellWrite(ws *core.Workspace, cwd string, words []string) Decision {
-	redirect := false
+	// A redirect writes only its target; the command's own arguments are written only by
+	// commands that write.
 	for i, w := range words {
 		if w == ">" && i+1 < len(words) {
-			redirect = true
-			if ProtectedPath(ws, abs(cwd, words[i+1])) {
+			if ProtectedPath(ws, abs(cwd, words[i+1])) || strings.Contains(words[i+1], ".truehand") && !agentWritable(words[i+1]) {
 				return deny("redirecting into %s: only truehand writes it", words[i+1])
 			}
 		}
@@ -203,18 +211,20 @@ func checkShellWrite(ws *core.Workspace, cwd string, words []string) Decision {
 			}
 		}
 	}
-	if readOnlyCmds[words[0]] && !redirect {
-		return allow()
-	}
-	if !writeCmds[words[0]] && !redirect {
+	if !writeCmds[words[0]] {
 		return allow()
 	}
 	for _, w := range words[1:] {
-		if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !strings.HasSuffix(w, "/plan.md") && !strings.HasSuffix(w, "/context.md") {
+		if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !agentWritable(w) {
 			return deny("`%s` would modify %s: only truehand writes it", words[0], w)
 		}
 	}
 	return allow()
+}
+
+// agentWritable reports the task files the agent writes itself.
+func agentWritable(path string) bool {
+	return strings.HasSuffix(path, "/plan.md") || strings.HasSuffix(path, "/context.md")
 }
 
 // CheckStop decides whether the agent may end its turn: not while the active task is being

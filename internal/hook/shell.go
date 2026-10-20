@@ -51,6 +51,10 @@ func segments(line string) [][]string {
 		case c == '>' || c == '<':
 			flushWord()
 			words = append(words, string(c))
+			// >>, >| and >& are one operator: the next character is not a pipe or a new command.
+			if c == '>' && i+1 < len(line) && (line[i+1] == '>' || line[i+1] == '|' || line[i+1] == '&') {
+				i++
+			}
 		default:
 			cur.WriteByte(c)
 			inWord = true

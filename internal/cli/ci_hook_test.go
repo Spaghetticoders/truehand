@@ -211,6 +211,32 @@ func TestCIVerifyUncoveredEarlierCommit(t *testing.T) {
 	}
 }
 
+func TestPrePushVerifiesThePushedCommitNotHEAD(t *testing.T) {
+	s := deliveredBranch(t)
+	good := strings.TrimSpace(s.git("rev-parse", "HEAD"))
+	s.git("checkout", "-q", "-b", "sneaky", "main")
+	s.write("sneaky.txt", "x\n")
+	s.git("add", "sneaky.txt")
+	s.git("commit", "-q", "-m", "feat: sneak")
+	bad := strings.TrimSpace(s.git("rev-parse", "HEAD"))
+	s.git("checkout", "-q", "feat/greet")
+	zero := strings.Repeat("0", 40)
+
+	line := func(ref, sha string) string { return ref + " " + sha + " " + ref + " " + zero + "\n" }
+	if code, out := s.run(line("refs/heads/sneaky", bad), "hook", "pre-push"); code != 3 || !strings.Contains(out, "sneaky.txt") {
+		t.Fatalf("pushing an uncovered branch from a clean checkout must fail, got %d:\n%s", code, out)
+	}
+	if code, out := s.run(line("refs/heads/feat/greet", good), "hook", "pre-push"); code != 0 {
+		t.Fatalf("pushing the delivered branch must pass, got %d:\n%s", code, out)
+	}
+	if code, out := s.run("refs/heads/sneaky "+zero+" refs/heads/sneaky "+bad+"\n", "hook", "pre-push"); code != 0 {
+		t.Fatalf("deleting a remote branch carries no work, got %d:\n%s", code, out)
+	}
+	if wt := s.git("worktree", "list"); strings.Count(wt, "\n") != 1 {
+		t.Fatalf("temporary worktrees must be removed:\n%s", wt)
+	}
+}
+
 func TestMergedTaskIsDoneNotStale(t *testing.T) {
 	s := deliveredBranch(t)
 	board := func() core.BoardTask {

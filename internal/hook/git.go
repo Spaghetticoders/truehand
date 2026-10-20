@@ -19,7 +19,7 @@ const requireBinary = "command -v truehand >/dev/null 2>&1 || { echo \"truehand 
 // commit rules at the git level.
 var GitHooks = map[string]string{
 	"commit-msg": "#!/bin/sh\n" + gitHookMarker + "\n" + requireBinary + "exec truehand hook commit-msg \"$1\"\n",
-	"pre-push":   "#!/bin/sh\n" + gitHookMarker + "\n" + requireBinary + "exec truehand ci verify --changed\n",
+	"pre-push":   "#!/bin/sh\n" + gitHookMarker + "\n" + requireBinary + "exec truehand hook pre-push\n",
 }
 
 // InstallGitHooks writes the hooks into the repo's hooks dir, refusing to overwrite foreign ones.

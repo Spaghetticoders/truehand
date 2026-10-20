@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spaghetticoders/truehand/internal/ci"
+	"github.com/spaghetticoders/truehand/internal/core"
 	"github.com/spaghetticoders/truehand/internal/gate"
 	"github.com/spaghetticoders/truehand/internal/hook"
 )
@@ -15,6 +17,7 @@ import (
 func init() {
 	register("hook claude", "Claude Code hook entry point (reads the hook JSON on stdin)", cmdHookClaude)
 	register("hook commit-msg", "git commit-msg hook: require conventional commit subjects", cmdHookCommitMsg)
+	register("hook pre-push", "git pre-push hook: every pushed commit must be covered by delivered tasks", cmdHookPrePush)
 	register("hook install", "Install truehand's git hooks (commit-msg, pre-push) in this repo", cmdHookInstall)
 	register("ci verify", "Merge lock: every changed file belongs to a delivered task with passing gates", cmdCIVerify)
 }
@@ -121,4 +124,53 @@ func printCI(c *ctx, r *ci.Report) {
 	} else {
 		fmt.Fprintf(w, "\nFAIL: %s\n", strings.Join(r.Problems, "; "))
 	}
+}
+
+// cmdHookPrePush verifies what is pushed, not what is checked out: git names the pushed
+// commits on stdin, and each one is checked in a temporary worktree.
+func cmdHookPrePush(c *ctx, args []string) error {
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	head, _ := ws.Repo.Git("rev-parse", "HEAD")
+	head = strings.TrimSpace(head)
+	failed := false
+	sc := bufio.NewScanner(c.stdin)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) != 4 || strings.Trim(f[1], "0") == "" || strings.HasPrefix(f[0], "refs/tags/") {
+			continue // deletions and tags carry no new work
+		}
+		ref, sha := f[0], f[1]
+		target := ws
+		if sha != head {
+			dir, err := os.MkdirTemp("", "truehand-push-")
+			if err != nil {
+				return err
+			}
+			if _, err := ws.Repo.Git("worktree", "add", "--detach", "--quiet", dir, sha); err != nil {
+				os.RemoveAll(dir)
+				return fmt.Errorf("checking out %s for verification: %w", ref, err)
+			}
+			defer func() {
+				_, _ = ws.Repo.Git("worktree", "remove", "--force", dir)
+				os.RemoveAll(dir)
+			}()
+			if target, err = core.Open(dir); err != nil {
+				return err
+			}
+		}
+		r, err := ci.Verify(target, "")
+		if err != nil {
+			return fmt.Errorf("%s: %w", ref, err)
+		}
+		fmt.Fprintf(c.stdout, "%s:\n", ref)
+		printCI(c, r)
+		failed = failed || !r.Pass
+	}
+	if failed {
+		return exitError{3}
+	}
+	return nil
 }
