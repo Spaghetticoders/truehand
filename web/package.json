@@ -1,0 +1,30 @@
+{
+  "name": "truehand-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bunx --bun vite",
+    "dev:mock": "VITE_TRUEHAND_API=mock bunx --bun vite",
+    "build": "bunx --bun vite build",
+    "build:mock": "VITE_TRUEHAND_API=mock bunx --bun vite build",
+    "preview": "bunx --bun vite preview",
+    "preview:mock": "bunx --bun vite preview --outDir dist-mock",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "dompurify": "3.4.16",
+    "marked": "18.0.14",
+    "qrcode-generator": "2.0.4"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@tsconfig/svelte": "5.0.8",
+    "svelte": "5.57.1",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  }
+}
