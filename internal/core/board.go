@@ -30,7 +30,11 @@ type BoardView struct {
 	Tasks []BoardTask `json:"tasks"`
 }
 
-func (w *Workspace) Board() (*BoardView, error) {
+func (w *Workspace) Board() (*BoardView, error) { return w.board(true) }
+
+// board lists this checkout's tasks, and with others also those found only on branches.
+func (w *Workspace) board(others bool) (*BoardView, error) {
+	w = w.session()
 	tasks, err := w.Store.List()
 	if err != nil {
 		return nil, err
@@ -50,6 +54,9 @@ func (w *Workspace) Board() (*BoardView, error) {
 			}
 		}
 		v.Tasks = append(v.Tasks, bt)
+	}
+	if !others {
+		return v, nil
 	}
 	known := map[string]bool{}
 	for _, t := range tasks {
@@ -77,6 +84,7 @@ type TaskDetail struct {
 }
 
 func (w *Workspace) Detail(t *board.Task) (*TaskDetail, error) {
+	w = w.session()
 	v, err := w.View(t)
 	if err != nil {
 		return nil, err

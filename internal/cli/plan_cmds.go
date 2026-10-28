@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/spaghetticoders/truehand/internal/core"
 	"github.com/spaghetticoders/truehand/internal/hands"
 )
 
@@ -36,7 +37,7 @@ func cmdPlanFetch(c *ctx, args []string) error {
 		return printJSON(c.stdout, pc)
 	}
 	if pc.Ticket != nil {
-		fmt.Fprintf(c.stdout, "Fetched %s — %s (%d comment(s))\n", pc.Ticket.Ref, pc.Ticket.Title, len(pc.Ticket.Comments))
+		fmt.Fprintf(c.stdout, "Fetched %s — %s (%d comment(s))\n", pc.Ticket.Ref, core.Printable(pc.Ticket.Title), len(pc.Ticket.Comments))
 	}
 	fmt.Fprintf(c.stdout, "Context → %s\n", pc.Context)
 	if pc.PlanCreated {

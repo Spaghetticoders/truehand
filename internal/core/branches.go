@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spaghetticoders/truehand/internal/board"
@@ -15,17 +16,21 @@ import (
 // human sits on the base branch, and a task delivered on its branch would otherwise vanish
 // from the board exactly when it is the human's turn to push and merge it.
 
-// otherBranches lists the local branches except the checked-out one.
+// otherBranches lists the local branches not checked out anywhere: a branch checked out
+// here or in another worktree has its tasks read live from that checkout, and listing it
+// again would show each of them twice. A worktree deleted by hand checks nothing out.
 func (w *Workspace) otherBranches() []string {
-	current, _ := w.Repo.Git("symbolic-ref", "--short", "-q", "HEAD")
-	current = strings.TrimSpace(current)
-	out, err := w.Repo.Git("for-each-ref", "--format=%(refname:short)", "refs/heads")
+	out, err := w.Repo.Git("for-each-ref", "--format=%(refname:short)%00%(worktreepath)", "refs/heads")
 	if err != nil {
 		return nil
 	}
 	var branches []string
-	for _, b := range strings.Split(strings.TrimSpace(out), "\n") {
-		if b != "" && b != current {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		b, wt, _ := strings.Cut(line, "\x00")
+		if b == "" {
+			continue
+		}
+		if _, err := os.Stat(wt); wt == "" || err != nil {
 			branches = append(branches, b)
 		}
 	}

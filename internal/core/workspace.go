@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/config"
+	"github.com/spaghetticoders/truehand/internal/evidence"
 	"github.com/spaghetticoders/truehand/internal/gate"
 	"github.com/spaghetticoders/truehand/internal/gitx"
 	"github.com/spaghetticoders/truehand/internal/tickets"
@@ -21,6 +23,75 @@ type Workspace struct {
 	Repo   *gitx.Repo
 	Config *config.Config
 	Store  *board.Store
+	// ApproversRef, when set, is the commit whose config lists the approvers (see gate.Env).
+	ApproversRef string
+	memo         *memo
+}
+
+// memo keeps what one read of the board or of a task computes several times per task.
+type memo struct {
+	mu   sync.Mutex
+	base map[string]string
+	fp   map[string]evidence.Fingerprint
+	git  map[string]gitResult
+	appr map[string][]config.Approver
+}
+
+type gitResult struct {
+	out string
+	err error
+}
+
+// git runs a read-only git command, once per session for the same arguments.
+func (w *Workspace) git(args ...string) (string, error) {
+	if w.memo == nil {
+		return w.Repo.Git(args...)
+	}
+	key := strings.Join(args, "\x00")
+	w.memo.mu.Lock()
+	r, ok := w.memo.git[key]
+	w.memo.mu.Unlock()
+	if ok {
+		return r.out, r.err
+	}
+	out, err := w.Repo.Git(args...)
+	w.memo.mu.Lock()
+	w.memo.git[key] = gitResult{out, err}
+	w.memo.mu.Unlock()
+	return out, err
+}
+
+// session returns a copy of w that remembers each task's base and fingerprint. It is for a
+// single read: commits or edits made meanwhile are not seen.
+func (w *Workspace) session() *Workspace {
+	if w.memo != nil {
+		return w
+	}
+	cp := *w
+	cp.memo = &memo{base: map[string]string{}, fp: map[string]evidence.Fingerprint{}, git: map[string]gitResult{}, appr: map[string][]config.Approver{}}
+	return &cp
+}
+
+// fingerprint is evidence.Compute for the task's scope on base, remembered in a session.
+func (w *Workspace) fingerprint(t *board.Task, base string) (evidence.Fingerprint, error) {
+	if w.memo == nil {
+		return evidence.Compute(w.Repo, base, t.Scope)
+	}
+	key := base + "\x00" + strings.Join(t.Scope, "\x00")
+	w.memo.mu.Lock()
+	fp, ok := w.memo.fp[key]
+	w.memo.mu.Unlock()
+	if ok {
+		return fp, nil
+	}
+	fp, err := evidence.Compute(w.Repo, base, t.Scope)
+	if err != nil {
+		return fp, err
+	}
+	w.memo.mu.Lock()
+	w.memo.fp[key] = fp
+	w.memo.mu.Unlock()
+	return fp, nil
 }
 
 // Open finds the repo containing dir and loads its config.
@@ -146,10 +217,31 @@ func (w *Workspace) Comment(id, text string) error {
 // the task's base ref, so a rebase onto a newer base never pulls other people's commits into
 // the task. On the base branch itself (trunk-based work) it is the commit the task started on.
 func (w *Workspace) BaseOf(t *board.Task) (string, error) {
+	if w.memo == nil {
+		return w.baseOf(t)
+	}
+	key := t.BaseRef + "\x00" + t.Base
+	w.memo.mu.Lock()
+	b, ok := w.memo.base[key]
+	w.memo.mu.Unlock()
+	if ok {
+		return b, nil
+	}
+	b, err := w.baseOf(t)
+	if err != nil {
+		return b, err
+	}
+	w.memo.mu.Lock()
+	w.memo.base[key] = b
+	w.memo.mu.Unlock()
+	return b, nil
+}
+
+func (w *Workspace) baseOf(t *board.Task) (string, error) {
 	if t.BaseRef == "" || t.Base == gitx.EmptyTree {
 		return t.Base, nil
 	}
-	mb, err := w.Repo.Git("merge-base", "HEAD", t.BaseRef)
+	mb, err := w.git("merge-base", "HEAD", t.BaseRef)
 	if err != nil {
 		if _, e := w.Repo.Git("cat-file", "-e", t.Base+"^{commit}"); e == nil {
 			return t.Base, nil
@@ -157,7 +249,7 @@ func (w *Workspace) BaseOf(t *board.Task) (string, error) {
 		return "", fmt.Errorf("task %s: base ref %s not found and start commit %s missing (in CI, fetch full history)", t.ID, t.BaseRef, t.Base)
 	}
 	mb = strings.TrimSpace(mb)
-	head, _ := w.Repo.Git("rev-parse", "HEAD")
+	head, _ := w.git("rev-parse", "HEAD")
 	if mb == strings.TrimSpace(head) {
 		return t.Base, nil
 	}
@@ -179,10 +271,16 @@ func (w *Workspace) Check(t *board.Task, target board.State) (gate.Result, error
 	if err != nil {
 		return gate.Result{}, err
 	}
-	env, err := gate.NewEnv(w.Repo, w.Config, w.Store, t, base)
+	fp, err := w.fingerprint(t, base)
 	if err != nil {
 		return gate.Result{}, err
 	}
+	env, err := gate.NewEnvAt(w.Repo, w.Config, w.Store, t, base, fp)
+	if err != nil {
+		return gate.Result{}, err
+	}
+	env.ApproversRef = w.ApproversRef
+	env.Approvers = func() ([]config.Approver, error) { return w.Approvers(t) }
 	return gate.Evaluate(env, target), nil
 }
 

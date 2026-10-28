@@ -62,52 +62,12 @@ func cmdInit(c *ctx, args []string) error {
 	if err != nil {
 		return err
 	}
-	if *stack == "" {
-		*stack = detectStack(repo.Root)
-	}
-	tpl, err := config.Template(*stack, detectBase(repo))
-	if err != nil {
-		return err
-	}
-	p := config.Path(repo.Root)
-	if _, err := os.Stat(p); err == nil && !*force {
-		return fmt.Errorf("%s already exists (use --force to overwrite)", p)
-	}
-	if err := os.MkdirAll(filepath.Join(repo.Root, config.Dir, "tasks"), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(p, []byte(tpl), 0o644); err != nil {
+	if *stack, err = core.InitConfig(repo, *stack, "", *force); err != nil {
 		return err
 	}
 	fmt.Fprintf(c.stdout, "Created %s (stack: %s): check the test and analyze commands in it.\n", filepath.Join(config.Dir, config.File), *stack)
 	fmt.Fprintln(c.stdout, "Next: truehand hook install, commit .truehand/config.yaml, then truehand task new --title \"...\" --description \"...\"")
 	return nil
-}
-
-// detectBase picks the branch tasks are measured against: the remote default branch when
-// there is one, else the current local branch.
-func detectBase(repo *gitx.Repo) string {
-	if out, err := repo.Git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		return strings.TrimSpace(out)
-	}
-	for _, ref := range []string{"origin/main", "origin/master"} {
-		if _, err := repo.Git("rev-parse", "--verify", "-q", ref); err == nil {
-			return ref
-		}
-	}
-	if out, err := repo.Git("branch", "--show-current"); err == nil && strings.TrimSpace(out) != "" {
-		return strings.TrimSpace(out)
-	}
-	return "main"
-}
-
-func detectStack(root string) string {
-	for file, stack := range map[string]string{"pubspec.yaml": "flutter", "go.mod": "go", "package.json": "node"} {
-		if _, err := os.Stat(filepath.Join(root, file)); err == nil {
-			return stack
-		}
-	}
-	return "generic"
 }
 
 func cmdTaskNew(c *ctx, args []string) error {
@@ -184,40 +144,27 @@ func cmdTaskEdit(c *ctx, args []string) error {
 	if err != nil {
 		return err
 	}
-	t, err := ws.Store.Load(pos[0])
-	if err != nil {
-		return err
-	}
-	changed := []string{}
+	var e core.TaskEdit
 	if set["description"] || *descFile != "" {
 		text, err := readDescription(c, *desc, *descFile)
 		if err != nil {
 			return err
 		}
-		if err := ws.Store.SetDescription(t.ID, text); err != nil {
-			return err
-		}
-		changed = append(changed, "description")
+		e.Description = &text
 	}
-	if *title != "" && *title != t.Title {
-		t.Title = *title
-		changed = append(changed, "title")
+	if *title != "" {
+		e.Title = title
 	}
 	switch *source {
 	case "":
 	case "none":
-		t.Source = ""
-		changed = append(changed, "source")
+		e.Source = new(string)
 	default:
-		t.Source = *source
-		changed = append(changed, "source")
+		e.Source = source
 	}
-	if len(changed) > 0 {
-		t.Updated = time.Now().UTC()
-		if err := ws.Store.Save(t); err != nil {
-			return err
-		}
-		_ = ws.Store.AppendEvent(t.ID, board.Event{Type: "edited", Actor: ws.Actor(), Detail: map[string]any{"fields": changed}})
+	t, _, err := ws.Edit(pos[0], e)
+	if err != nil {
+		return err
 	}
 	if *asJSON {
 		return printJSON(c.stdout, t)
@@ -298,7 +245,7 @@ func cmdTaskList(c *ctx, args []string) error {
 		if ws.Stale(t) {
 			state += " (stale)"
 		}
-		fmt.Fprintf(c.stdout, "%s %-14s %-18s %s\n", mark, t.ID, state, t.Title)
+		fmt.Fprintf(c.stdout, "%s %-14s %-18s %s\n", mark, t.ID, state, core.Printable(t.Title))
 	}
 	return nil
 }
@@ -344,7 +291,7 @@ func cmdTaskShow(c *ctx, args []string) error {
 	if *asJSON {
 		return printJSON(c.stdout, v)
 	}
-	fmt.Fprintf(c.stdout, "%s — %s\n  state:  %s\n  base:   %s\n", t.ID, t.Title, t.State, shortSHA(t.Base))
+	fmt.Fprintf(c.stdout, "%s — %s\n  state:  %s\n  base:   %s\n", t.ID, core.Printable(t.Title), t.State, shortSHA(t.Base))
 	if t.Source != "" {
 		fmt.Fprintf(c.stdout, "  source: %s\n", t.Source)
 	}
@@ -352,16 +299,16 @@ func cmdTaskShow(c *ctx, args []string) error {
 		fmt.Fprintf(c.stdout, "  scope:  %s\n", strings.Join(t.Scope, ", "))
 	}
 	for role, who := range t.Roles {
-		fmt.Fprintf(c.stdout, "  %s: %s\n", role, who)
+		fmt.Fprintf(c.stdout, "  %s: %s\n", role, core.Printable(who))
 	}
 	if v.Description != "" {
-		fmt.Fprintf(c.stdout, "\nDescription:\n%s\n", indent(strings.TrimSpace(v.Description), "  "))
+		fmt.Fprintf(c.stdout, "\nDescription:\n%s\n", indent(strings.TrimSpace(core.PrintableText(v.Description)), "  "))
 	}
 	if len(v.Comments) > 0 {
 		fmt.Fprintf(c.stdout, "\nComments (%d):\n", len(v.Comments))
 		for _, cm := range v.Comments {
 			text, _ := cm.Detail["text"].(string)
-			fmt.Fprintf(c.stdout, "  %s — %s\n%s\n", cm.Actor, cm.Time.Local().Format("01-02 15:04"), indent(strings.TrimSpace(text), "    "))
+			fmt.Fprintf(c.stdout, "  %s — %s\n%s\n", core.Printable(cm.Actor), cm.Time.Local().Format("01-02 15:04"), indent(strings.TrimSpace(core.PrintableText(text)), "    "))
 		}
 	}
 	if v.NextGate != nil {
@@ -370,7 +317,7 @@ func cmdTaskShow(c *ctx, args []string) error {
 	}
 	if len(v.Evidence) > 0 {
 		fmt.Fprintln(c.stdout, "\nEvidence (latest per hand):")
-		printEvidence(c.stdout, v.Evidence)
+		printEvidence(c.stdout, v.Evidence, ws.Identity())
 	}
 	return nil
 }
@@ -607,6 +554,11 @@ func cmdApprove(c *ctx, args []string) error {
 	if *planSHA == "" && !isTTY() {
 		return errors.New("approval needs a human at a terminal (stdin is not a TTY). Agents cannot approve")
 	}
+	if approvers, err := ws.Approvers(t); err != nil {
+		return err
+	} else if len(approvers) > 0 {
+		return errors.New("this repo lists approvers: plans are approved by signing with an approver's key in the Truehand app, not from a terminal")
+	}
 	b, err := os.ReadFile(ws.Store.PlanPath(t.ID))
 	if err != nil {
 		return fmt.Errorf("no plan.md to approve for %s", t.ID)
@@ -621,7 +573,11 @@ func cmdApprove(c *ctx, args []string) error {
 		}
 		via = "app+" + via
 	} else {
-		fmt.Fprintf(c.stdout, "%s\n\nApprove this plan for %s? Type the task id to confirm: ", strings.TrimSpace(string(b)), t.ID)
+		shown := core.PrintableText(string(b))
+		if hidden := len([]rune(string(b))) - len([]rune(shown)); hidden > 0 {
+			shown += fmt.Sprintf("\n\n(plan.md also holds %d control or invisible character(s), not shown: approving approves them too)", hidden)
+		}
+		fmt.Fprintf(c.stdout, "%s\n\nApprove this plan for %s? Type the task id to confirm: ", strings.TrimSpace(shown), t.ID)
 		line, _ := bufio.NewReader(c.stdin).ReadString('\n')
 		if strings.TrimSpace(line) != t.ID {
 			return errors.New("not approved")
@@ -774,7 +730,7 @@ func cmdEvidenceList(c *ctx, args []string) error {
 		fmt.Fprintf(c.stdout, "No evidence for %s yet.\n", t.ID)
 		return nil
 	}
-	printEvidence(c.stdout, views)
+	printEvidence(c.stdout, views, ws.Identity())
 	return nil
 }
 
@@ -813,8 +769,12 @@ func printGate(w io.Writer, r gate.Result) {
 	}
 }
 
-func printEvidence(w io.Writer, views []core.EvidenceView) {
+func printEvidence(w io.Writer, views []core.EvidenceView, me core.Identity) {
 	for _, v := range views {
+		by := ""
+		if v.Actor != "" {
+			by = "  by " + core.ResolveActors([]string{v.Actor}, nil, me)[v.Actor].Name
+		}
 		fresh := "fresh"
 		if !v.Fresh {
 			fresh = "STALE"
@@ -822,7 +782,7 @@ func printEvidence(w io.Writer, views []core.EvidenceView) {
 		if !v.Intact {
 			fresh = "TAMPERED"
 		}
-		fmt.Fprintf(w, "  %s %-16s %-5s %-8s %s  %s\n", verdictMark(v.Verdict), v.ID, v.Verdict, fresh, v.Created.Local().Format("01-02 15:04"), firstLine(v.Summary))
+		fmt.Fprintf(w, "  %s %-16s %-5s %-8s %s  %s\n", verdictMark(v.Verdict), v.ID, v.Verdict, fresh, v.Created.Local().Format("01-02 15:04"), core.Printable(firstLine(v.Summary))+by)
 	}
 }
 

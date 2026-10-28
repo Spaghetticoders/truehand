@@ -29,6 +29,11 @@ func (r *Repo) Git(args ...string) (string, error) {
 	return run(r.Root, nil, args...)
 }
 
+// GitInput is Git with stdin, for the batch commands.
+func (r *Repo) GitInput(stdin []byte, args ...string) (string, error) {
+	return run(r.Root, stdin, args...)
+}
+
 func run(dir string, stdin []byte, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

@@ -44,7 +44,7 @@ func (w *Workspace) Evidence(t *board.Task, all bool) ([]EvidenceView, error) {
 	if err != nil {
 		return nil, err
 	}
-	now, err := evidence.Compute(w.Repo, base, t.Scope)
+	now, err := w.fingerprint(t, base)
 	if err != nil {
 		return nil, err
 	}

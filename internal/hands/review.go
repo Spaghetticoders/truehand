@@ -25,5 +25,5 @@ func Review(ws *core.Workspace, t *board.Task, verdict string, notes []byte) (*R
 	if err := s.WriteFile("notes.md", notes); err != nil {
 		return nil, err
 	}
-	return s.Finish(verdict, "review "+verdict+" by "+s.Rec.Actor, "")
+	return s.Finish(verdict, "review "+verdict, "")
 }
