@@ -26,18 +26,24 @@ Use the MCP tools (`truehand_*`) or the CLI (`truehand …`); they are the same 
   the description lacks. Read it all. context.md is a snapshot: `truehand_status` (or
   `truehand task show`) always lists every comment, so check it again whenever you resume.
 - Questions for the user, decisions and findings go on the task with
-  `truehand_task_comment`, so they stay with the work and show on the board.
+  `truehand_task_comment`, so they stay with the work and show on the board. Write a
+  question as a question — a line ending with `?` or starting with `Question:` — and
+  decisions as plain statements: only questions put the task in the user's *Waiting for you*.
 - Check whether the work is already done before planning: a grep is cheaper than a plan.
 - Fill `.truehand/tasks/<id>/plan.md`: Goal, Scope, Out of scope, Steps (each step ends with
   `— verify:` and how), Verification, Risks. `truehand_plan_check` until it is valid.
 - **Stop and ask the user to approve.** Approval is human-only: they press *Approve plan* on
-  the task in the Truehand app, or run `truehand approve <id>` in a terminal; either way the
-  system asks for their password. There is no tool for it, and trying to fake it is blocked.
-  While you wait, you may only read.
+  the task in the Truehand app on their Mac, which asks for Touch ID — or, in a repo that
+  lists approvers, for a signature with their key; from a phone the request waits for the
+  Mac. Without the app, `truehand approve <id>` in their terminal asks for their password.
+  There is no tool for it, and trying to fake it is blocked. While you wait, you may only
+  read.
 
 ## 2. Build
 
 - The approval moves the task to `approved`; then `truehand_task_move {state: building}`.
+- A session started by the Truehand app runs in the task's own worktree (branch `th/<id>`).
+  Stay in it: other checkouts belong to other tasks.
 - Write the code and the tests together. If a design looks wrong, stop and ask; never invent
   copy or measures, and never silently implement the version you prefer.
 
@@ -70,8 +76,9 @@ open: `truehand_task_move {state: verified}`.
 
 The developer cannot review their own task — the gate checks the actor, and everything in
 one Claude Code process (subagents, in-process teammates) counts as the same actor. A review
-comes from a separate Claude Code process (a teammate in its own pane, another session) or a
-human: they read the diff and the
+comes from a separate Claude Code process — the user's *Start review* in the Truehand app
+opens one, never one that worked on the task — another session, or a human: they read the
+diff and the
 evidence, run what they need, and record `truehand_review {verdict, notes}` with what they
 read, ran and found. Then `reviewed`.
 
@@ -79,7 +86,7 @@ read, ran and found. Then `reviewed`.
 
 - Commits are allowed only from `reviewed` on, with conventional commit subjects
   (`type(scope): summary`). Never `--no-verify`.
-- **Never push.** The user pushes.
+- **Never push.** The user pushes and opens the PR (*Push & PR* in the app).
 - `truehand_task_move {state: delivered}`. Commit `.truehand/tasks/<id>/` with the work: CI
   runs `truehand ci verify` and refuses changes not covered by a delivered task.
 
