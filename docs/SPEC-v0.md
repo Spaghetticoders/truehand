@@ -279,6 +279,8 @@ commit-config, pairing, remote access, revoking devices).
 
 One binary, `truehand serve --app`, is the whole app; the Mac app is a thin shell around it.
 
+![The board](images/board.png)
+
 | Part | What it does |
 |---|---|
 | Server | `serve --app` serves the board of every registered project (Client → Project), the tasks with plan, evidence and diff, and the agents' terminals. It runs as a daemon in its own session: closing the window leaves agents running. State lives in `~/.truehand/app/` (0700; files 0600, written atomically): `state.json` (projects, machines, settings), `sessions.json`, `auth.json` (hashes of the token and of device cookies, the approval queue), `scrollback/`, `hooks/settings.json`, `serve.lock`. Nothing in browser storage except the theme. |

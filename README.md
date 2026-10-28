@@ -2,6 +2,10 @@
 
 Reliable hands for AI coding agents.
 
+<p align="center">
+  <img src="docs/images/board.png" alt="The board: everything waiting for you across projects, one action per row" width="100%">
+</p>
+
 Claude, OpenClaw, Hermes and the rest are general-purpose robots: they decide *what* to do.
 Truehand gives them hands that do it *the same way every time*, and a board with gates so
 work cannot move forward without evidence:
@@ -82,6 +86,18 @@ truehand task move delivered
 Truehand for Mac (`make shell`, or the DMG) is a thin window around one binary,
 `truehand serve --app`, which it starts as a daemon (closing the window leaves agents
 running) and signs in to with a token kept in the Keychain.
+
+| Task with the agent's live terminal | Evidence the gate checks |
+|---|---|
+| ![Task with the agent's live terminal](docs/images/task-agent.png) | ![Evidence of a task, one failed check](docs/images/task-proofs.png) |
+| **Every agent, side by side** | **The task's changes** |
+| ![Sessions page](docs/images/sessions.png) | ![Diff of a task](docs/images/task-diff.png) |
+
+<p align="center">
+  <img src="docs/images/phone-board.png" alt="The board on a phone" width="260">
+  &nbsp;
+  <img src="docs/images/phone-terminal.png" alt="Answering an agent from a phone" width="260">
+</p>
 
 - **Projects** are grouped by client and live in `~/.truehand/app`. Adding a repo offers
   **Activate Truehand**: rules (`.truehand/config.yaml`), git hooks, then **Commit config** on
