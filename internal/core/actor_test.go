@@ -288,6 +288,11 @@ func TestPeerIsAgentReadsRealEnvironment(t *testing.T) {
 	}
 	if runtime.GOOS == "darwin" {
 		pid := start([]string{path, "HOME=/tmp"}, "/bin/sh", "-c", "echo ready; read x")
+		// Whether macOS hides a platform binary's environment depends on the machine (CI runners
+		// do not); what must hold is that an environment we cannot read is not trusted.
+		if env, ok := processEnv(pid); ok && len(env) > 0 {
+			t.Skip("this machine shows /bin/sh's environment")
+		}
 		if !PeerIsAgent(pid) {
 			t.Error("a system binary whose environment macOS hides counted as trusted")
 		}
