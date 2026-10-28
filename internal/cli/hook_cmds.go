@@ -2,12 +2,19 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/spaghetticoders/truehand/internal/agents"
 	"github.com/spaghetticoders/truehand/internal/ci"
 	"github.com/spaghetticoders/truehand/internal/core"
 	"github.com/spaghetticoders/truehand/internal/gate"
@@ -16,6 +23,7 @@ import (
 
 func init() {
 	register("hook claude", "Claude Code hook entry point (reads the hook JSON on stdin)", cmdHookClaude)
+	register("hook status", "Status hook of sessions started by the Truehand app (prints nothing, always exits 0)", cmdHookStatus)
 	register("hook commit-msg", "git commit-msg hook: require conventional commit subjects", cmdHookCommitMsg)
 	register("hook pre-push", "git pre-push hook: every pushed commit must be covered by delivered tasks", cmdHookPrePush)
 	register("hook install", "Install truehand's git hooks (commit-msg, pre-push) in this repo", cmdHookInstall)
@@ -24,6 +32,41 @@ func init() {
 
 func cmdHookClaude(c *ctx, args []string) error {
 	return hook.Claude(c.stdin, c.stdout, os.Getenv)
+}
+
+// cmdHookStatus forwards a hook event to the app server that started this session. The
+// status is cosmetic, so every failure is silent and the agent is never held up.
+func cmdHookStatus(c *ctx, args []string) error {
+	sid, secret, addr, err := agents.ParseSessionEnv(os.Getenv("TRUEHAND_SESSION"))
+	if err != nil {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(c.stdin, 256<<10))
+	if err != nil {
+		return nil
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	host := addr
+	if addr == agents.SocketAddr {
+		sock, err := socketPath()
+		if err != nil {
+			return nil
+		}
+		host = "socket"
+		client.Transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		}}
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://"+host+"/hook/status", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Truehand-Session", sid+":"+secret)
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
+	}
+	return nil
 }
 
 func cmdHookCommitMsg(c *ctx, args []string) error {

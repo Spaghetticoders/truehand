@@ -3,7 +3,10 @@ module github.com/spaghetticoders/truehand
 go 1.25.1
 
 require (
+	github.com/coder/websocket v1.8.14
+	github.com/creack/pty v1.1.24
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	golang.org/x/term v0.31.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

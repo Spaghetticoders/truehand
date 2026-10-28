@@ -36,6 +36,22 @@ func Extract(dir string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
+	self, err := selfBinary()
+	if err != nil {
+		return err
+	}
+	return write(dir, self)
+}
+
+func selfBinary() ([]byte, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(self)
+}
+
+func write(dir string, self []byte) error {
 	err := fs.WalkDir(truehand.ClaudePlugin, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -57,16 +73,8 @@ func Extract(dir string) error {
 	if err != nil {
 		return err
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	b, err := os.ReadFile(self)
-	if err != nil {
-		return err
-	}
 	name := fmt.Sprintf("truehand-%s-%s", unameS(), unameM())
-	return os.WriteFile(filepath.Join(dir, "plugin", "bin", name), b, 0o755)
+	return os.WriteFile(filepath.Join(dir, "plugin", "bin", name), self, 0o755)
 }
 
 // The shim looks for truehand-$(uname -s)-$(uname -m).

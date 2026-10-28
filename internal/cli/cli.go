@@ -49,6 +49,12 @@ func usage(w io.Writer) {
 
 // Run executes the CLI and returns the process exit code.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if e2eStart != nil {
+		if err := e2eStart(stderr); err != nil {
+			fmt.Fprintf(stderr, "truehand: %v\n", err)
+			return 2
+		}
+	}
 	dir, _ := os.Getwd()
 	return runIn(dir, args, stdin, stdout, stderr)
 }

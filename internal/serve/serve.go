@@ -1,416 +1,331 @@
-// Package serve is the local HTTP API behind the Truehand app: read-only views of the board
-// across repos, evidence files, a change stream (SSE), and human approval guarded by a
-// token that only the person who started the server sees.
+// Package serve is the local HTTP API behind the Truehand app: projects and their boards,
+// tasks, agent sessions in terminals, and the human-only actions (approve, push, PR), which
+// need the Mac app's in-memory secret and an OS authentication every time.
 package serve
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/hex"
+	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sort"
+	"os/exec"
+	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/spaghetticoders/truehand/internal/board"
-	"github.com/spaghetticoders/truehand/internal/core"
-	"github.com/spaghetticoders/truehand/internal/evidence"
+	"github.com/spaghetticoders/truehand/internal/agents"
+	"github.com/spaghetticoders/truehand/internal/appstate"
 	"github.com/spaghetticoders/truehand/internal/humanauth"
-	"github.com/spaghetticoders/truehand/internal/plan"
 )
 
-type Server struct {
-	Repos []string // repo roots
-	Token string   // required on every API call
-	// Approvals is set only after a human authenticated with the OS when the server started.
-	Approvals bool
-	// AnyHost accepts any Host header (listening on all interfaces). Otherwise only loopback
-	// names are accepted, which defeats DNS rebinding from web pages.
-	AnyHost bool
-	Web     fs.FS // optional static app
+// Runner runs a program in dir; tests replace it for git push and gh.
+type Runner func(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
 
-	mu      sync.Mutex
-	clients map[chan string]bool
+type Server struct {
+	Store  *appstate.Store
+	Agents *agents.Manager // nil when sessions are unavailable (read-only, or no claude)
+	// ReadOnly refuses every change: set when serve runs inside an agent session.
+	ReadOnly bool
+	// Hosts are accepted Host names besides loopback (tailnet IP, MagicDNS name).
+	Hosts   []string
+	Web     fs.FS
+	Version string
+	// ShellSecretHash is the sha256 of the secret the Mac app holds in memory. Only requests
+	// that carry it may ask for an OS authentication.
+	ShellSecretHash string
+	// HumanAuth asks the OS to authenticate the user; tests replace it.
+	HumanAuth func(reason string) error
+	// TruehandBin is the directory put first on PATH for git push, so the pre-push hook finds
+	// this binary.
+	TruehandBin  string
+	WorktreesDir string // ~/.truehand/worktrees
+	Home         string // the file browser stays under it
+	Run          Runner
+	LookPath     func(string) (string, error)
+	// Shutdown stops the server gracefully, as SIGTERM does; set by the serve command.
+	Shutdown func()
+	// ApplyRemote opens or closes remote access at once after the settings change; set by
+	// the serve command, which owns the listeners. It returns the Host names to accept.
+	ApplyRemote func(appstate.Remote) ([]string, error)
+	// RemoteStatus is remote access as it really is: "off", "listening" or "error" with why.
+	RemoteStatus func() (state, msg string)
+	// TailnetIP finds this Mac's Tailscale address when the settings name none.
+	TailnetIP func() string
+	// MacKey is the public key the Mac app signs intents with (its Secure Enclave key), as
+	// it registered it; nil until then.
+	MacKey *ecdsa.PublicKey
+	// Remotes are the machines reached over ssh; nil on a peer.
+	Remotes *Remotes
+	// Peer is set on `serve --peer`: a remote machine's server, reached by the Mac through
+	// its unix socket only.
+	Peer bool
+
+	mu       sync.Mutex
+	clients  map[chan sseEvent]bool
+	pairs    map[string]time.Time // sha256 of pending pairing codes → expiry
+	pairFail []time.Time
+	prs      map[string]prState // branch → last known PR, for the waiting list
+	health   *healthCache
+
+	waitingDirty atomic.Bool
+	// sessionsMu makes "is the checkout free?" and starting a session one step.
+	sessionsMu sync.Mutex
+
+	closeOnce sync.Once
+	closing   chan struct{}
+	boards    map[string]cachedBoard
+	probing   bool
+	probed    chan struct{} // closed when the first tool probe is done
+	// waitedProbe: one request already waited for the first probe; the next ones do not.
+	waitedProbe bool
 }
 
-func NewToken() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+func (s *Server) closingCh() chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing == nil {
+		s.closing = make(chan struct{})
+	}
+	return s.closing
+}
+
+// Close ends the event streams, which never finish on their own; pass it to
+// http.Server.RegisterOnShutdown so a shutdown does not wait for them.
+func (s *Server) Close() { s.closeOnce.Do(func() { close(s.closingCh()) }) }
+
+func (s *Server) defaults() {
+	if s.HumanAuth == nil {
+		s.HumanAuth = humanauth.Authenticate
+	}
+	if s.Run == nil {
+		s.Run = runCmd
+	}
+	if s.LookPath == nil {
+		s.LookPath = exec.LookPath
+	}
+	if s.Home == "" {
+		s.Home, _ = os.UserHomeDir()
+	}
+}
+
+func runCmd(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	return cmd.CombinedOutput()
 }
 
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/repos", s.repos)
-	mux.HandleFunc("GET /api/repos/{repo}/tasks", s.tasks)
-	mux.HandleFunc("GET /api/repos/{repo}/tasks/{id}", s.task)
-	mux.HandleFunc("GET /api/repos/{repo}/tasks/{id}/plan", s.plan)
-	mux.HandleFunc("GET /api/repos/{repo}/tasks/{id}/files/{path...}", s.file)
-	mux.HandleFunc("POST /api/repos/{repo}/tasks/{id}/approve", s.approve)
-	mux.HandleFunc("GET /api/events", s.events)
-	if s.Web != nil {
-		mux.Handle("/", http.FileServerFS(s.Web))
-	}
-	return s.guard(mux)
+	h := s.guard(s.routeRemote(s.routes()))
+	go s.tools(context.Background())
+	return h
 }
 
-// guard rejects foreign Host headers and API calls without the token. No CORS headers are
-// sent: the app is served from this origin, and other sites must not read the board.
-func (s *Server) guard(h http.Handler) http.Handler {
+func (s *Server) routes() *http.ServeMux {
+	s.defaults()
+	mux := http.NewServeMux()
+	h := func(pattern string, fn http.HandlerFunc) { mux.HandleFunc(pattern, fn) }
+
+	h("POST /api/login", s.login)
+	h("POST /api/pair", s.pair)
+	h("POST /api/pair/code", s.pairCode)
+	h("GET /api/me", s.me)
+	h("GET /api/devices", s.devices)
+	h("DELETE /api/devices/{id}", s.deleteDevice)
+	h("POST /api/token/rotate", s.rotateToken)
+	h("POST /api/shutdown", s.shutdown)
+	h("POST /api/shell/challenge", s.shellChallenge)
+	h("POST /api/shell/key", s.shellKey)
+	h("GET /api/version", s.version)
+	h("GET /api/settings", s.getSettings)
+	h("PUT /api/settings", s.putSettings)
+
+	h("GET /api/snapshot", s.snapshot)
+	h("POST /api/projects", s.addProject)
+	h("PATCH /api/projects/{pid}", s.patchProject)
+	h("DELETE /api/projects/{pid}", s.deleteProject)
+	h("GET /api/fs/dirs", s.fsDirs)
+	h("GET /api/projects/{pid}/activation", s.activation)
+	h("POST /api/projects/{pid}/activate", s.activate)
+	h("PUT /api/projects/{pid}/config", s.putConfig)
+	h("POST /api/projects/{pid}/fetch", s.fetch)
+	h("POST /api/projects/{pid}/commit-config", s.commitConfig)
+	h("POST /api/projects/{pid}/sessions", s.startFreeSession)
+
+	h("POST /api/projects/{pid}/tasks", s.newTask)
+	h("GET /api/projects/{pid}/tasks/{id}", s.task)
+	h("PATCH /api/projects/{pid}/tasks/{id}", s.editTask)
+	h("POST /api/projects/{pid}/tasks/{id}/comments", s.comment)
+	h("POST /api/projects/{pid}/tasks/{id}/actions/{action}", s.act)
+	h("GET /api/projects/{pid}/tasks/{id}/files/{path...}", s.file)
+	h("GET /api/projects/{pid}/tasks/{id}/diff", s.diff)
+	h("GET /api/projects/{pid}/tasks/{id}/pr", s.getPR)
+	h("POST /api/projects/{pid}/tasks/{id}/intent", s.intent)
+	h("DELETE /api/projects/{pid}/tasks/{id}/worktree", s.deleteWorktree)
+
+	h("GET /api/queued", s.queued)
+	h("POST /api/queued/{qid}/confirm", s.confirmQueued)
+	h("DELETE /api/queued/{qid}", s.discardQueued)
+
+	h("POST /api/sessions/{sid}/resume", s.resumeSession)
+	h("POST /api/sessions/{sid}/signal", s.signalSession)
+	h("DELETE /api/sessions/{sid}", s.deleteSession)
+	h("GET /api/sessions/{sid}/scrollback", s.scrollback)
+	h("GET /api/sessions/{sid}/pty", s.pty)
+
+	h("GET /api/machines", s.listMachines)
+	h("POST /api/machines", s.addMachine)
+	h("POST /api/machines/{mid}/reconnect", s.reconnectMachine)
+	h("POST /api/machines/{mid}/update", s.updateMachine)
+	h("PATCH /api/machines/{mid}", s.patchMachine)
+	h("DELETE /api/machines/{mid}", s.deleteMachine)
+	h("GET /api/machines/{mid}/fs/dirs", s.machineDirs)
+
+	h("GET /api/events", s.events)
+	h("POST /hook/status", s.statusHook)
+
+	h("/api/", func(w http.ResponseWriter, r *http.Request) { httpError(w, http.StatusNotFound, "no such endpoint") })
+	mux.Handle("/", s.static())
+	return mux
+}
+
+func isUnsafe(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+}
+
+// guard applies the rules every request obeys before reaching a handler: a known Host
+// (against DNS rebinding), Origin equal to Host on anything that changes state and on
+// WebSockets (against cross-site requests), no changes at all in read-only mode, and a
+// credential on the API.
+func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.AnyHost {
-			host := r.Host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
-				httpError(w, http.StatusForbidden, "unexpected Host header")
+		if !s.allowedHost(r.Host) {
+			httpError(w, http.StatusForbidden, "unexpected Host header")
+			return
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		hook := r.URL.Path == "/hook/status"
+		ws := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		if (isUnsafe(r.Method) || ws) && !hook && !sameOrigin(r) {
+			httpError(w, http.StatusForbidden, "cross-origin request refused")
+			return
+		}
+		if s.ReadOnly && isUnsafe(r.Method) && r.URL.Path != "/api/login" {
+			httpError(w, http.StatusForbidden, "this server is read-only: it runs inside an agent session")
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") && !(r.Method == http.MethodPost && (r.URL.Path == "/api/pair" || r.URL.Path == "/api/shell/challenge")) {
+			id, ok := s.authenticate(r)
+			if !ok {
+				httpError(w, http.StatusUnauthorized, "not signed in: open the Truehand app, or pair this device")
 				return
 			}
+			// Requests from a browser must come with its Origin when authenticated by cookie;
+			// only non-browser clients (the Mac app's backend, scripts) use the bearer token.
+			if id.Via == viaDevice && (isUnsafe(r.Method) || ws) && r.Header.Get("Origin") == "" {
+				httpError(w, http.StatusForbidden, "missing Origin")
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), identityKey{}, id))
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") && !s.authorized(r) {
-			httpError(w, http.StatusUnauthorized, "missing or wrong token: open the link printed by `truehand serve`")
-			return
-		}
-		h.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) authorized(r *http.Request) bool {
-	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if tok == "" {
-		// Images and the event stream cannot always set headers.
-		tok = r.URL.Query().Get("token")
+func (s *Server) allowedHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
 	}
-	return s.Token != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.Token)) == 1
-}
-
-// safeJoin joins rel under dir and refuses any symlink along the way, so a link planted in a
-// task directory cannot expose files outside it.
-func safeJoin(dir, rel string) (string, error) {
-	rel = filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errors.New("invalid path")
+	host = strings.Trim(host, "[]")
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
 	}
-	p := dir
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		p = filepath.Join(p, part)
-		fi, err := os.Lstat(p)
-		if err != nil {
-			return "", err
-		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", errors.New("symlinks are not served")
-		}
-	}
-	return p, nil
-}
-
-type repoInfo struct {
-	Name   string         `json:"name"`
-	Root   string         `json:"root"`
-	Error  string         `json:"error,omitempty"`
-	Counts map[string]int `json:"counts"`
-}
-
-// repoName is the URL key of a repo: its directory name, de-duplicated by index.
-func (s *Server) names() map[string]string {
-	out := map[string]string{}
-	for i, r := range s.Repos {
-		n := filepath.Base(r)
-		if _, dup := out[n]; dup {
-			n = fmt.Sprintf("%s-%d", n, i)
-		}
-		out[n] = r
-	}
-	return out
-}
-
-func (s *Server) workspace(w http.ResponseWriter, r *http.Request) *core.Workspace {
-	root, ok := s.names()[r.PathValue("repo")]
-	if !ok {
-		httpError(w, http.StatusNotFound, "unknown repo")
-		return nil
-	}
-	ws, err := core.Open(root)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return nil
-	}
-	return ws
-}
-
-func (s *Server) repos(w http.ResponseWriter, r *http.Request) {
-	names := s.names()
-	keys := make([]string, 0, len(names))
-	for k := range names {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := []repoInfo{}
-	for _, k := range keys {
-		info := repoInfo{Name: k, Root: names[k], Counts: map[string]int{}}
-		ws, err := core.Open(names[k])
-		if err != nil {
-			info.Error = err.Error()
-		} else if tasks, err := ws.Store.List(); err == nil {
-			for _, t := range tasks {
-				info.Counts[string(t.State)]++
-			}
-		}
-		out = append(out, info)
-	}
-	writeJSON(w, out)
-}
-
-type taskSummary struct {
-	*board.Task
-	Active  bool     `json:"active"`
-	Stale   bool     `json:"stale"`
-	Missing []string `json:"missing"`
-}
-
-func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
-	ws := s.workspace(w, r)
-	if ws == nil {
-		return
-	}
-	tasks, err := ws.Store.List()
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	active := ws.ActiveTask()
-	out := []taskSummary{}
-	for _, t := range tasks {
-		ts := taskSummary{Task: t, Active: t.ID == active, Stale: ws.Stale(t), Missing: []string{}}
-		if next := t.State.Next(); next != "" {
-			if res, err := ws.Check(t, next); err == nil {
-				for _, it := range res.Items {
-					if it.Status == "fail" {
-						ts.Missing = append(ts.Missing, it.Check)
-					}
-				}
-			}
-		}
-		out = append(out, ts)
-	}
-	writeJSON(w, out)
-}
-
-func (s *Server) task(w http.ResponseWriter, r *http.Request) {
-	ws := s.workspace(w, r)
-	if ws == nil {
-		return
-	}
-	t, err := ws.Store.Load(r.PathValue("id"))
-	if err != nil {
-		httpError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	v, err := ws.View(t)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	events, _ := ws.Store.Events(t.ID)
-	if events == nil {
-		events = []board.Event{}
-	}
-	writeJSON(w, map[string]any{"view": v, "events": events})
-}
-
-func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
-	ws := s.workspace(w, r)
-	if ws == nil {
-		return
-	}
-	id := r.PathValue("id")
-	if err := board.ValidID(id); err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	p, err := safeJoin(ws.Store.TaskDir(id), "plan.md")
-	if err != nil {
-		writeJSON(w, map[string]any{"exists": false, "markdown": "", "problems": []plan.Problem{}})
-		return
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		writeJSON(w, map[string]any{"exists": false, "markdown": "", "problems": []plan.Problem{}})
-		return
-	}
-	probs := plan.Check(string(b))
-	if probs == nil {
-		probs = []plan.Problem{}
-	}
-	writeJSON(w, map[string]any{"exists": true, "markdown": string(b), "problems": probs, "sha256": evidence.HashBytes(b)})
-}
-
-// file serves a file from the task directory (evidence images, context.md).
-func (s *Server) file(w http.ResponseWriter, r *http.Request) {
-	ws := s.workspace(w, r)
-	if ws == nil {
-		return
-	}
-	id := r.PathValue("id")
-	if err := board.ValidID(id); err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	p, err := safeJoin(ws.Store.TaskDir(id), r.PathValue("path"))
-	if err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	http.ServeFile(w, r, p)
-}
-
-// approve records a human approval of the plan. The caller must present the token printed
-// when the server started, and the sha256 of the plan they read, so an approval never
-// covers a plan edited after it was displayed.
-func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
-	if !s.Approvals {
-		httpError(w, http.StatusForbidden, "approvals are disabled: the person who started `truehand serve` did not authenticate")
-		return
-	}
-	ws := s.workspace(w, r)
-	if ws == nil {
-		return
-	}
-	t, err := ws.Store.Load(r.PathValue("id"))
-	if err != nil {
-		httpError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	var body struct {
-		PlanSHA string `json:"plan_sha256"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PlanSHA == "" {
-		httpError(w, http.StatusBadRequest, "body must be {\"plan_sha256\": \"...\"}")
-		return
-	}
-	pp, err := safeJoin(ws.Store.TaskDir(t.ID), "plan.md")
-	if err != nil {
-		httpError(w, http.StatusConflict, "no plan.md")
-		return
-	}
-	b, err := os.ReadFile(pp)
-	if err != nil {
-		httpError(w, http.StatusConflict, "no plan.md")
-		return
-	}
-	if evidence.HashBytes(b) != body.PlanSHA {
-		httpError(w, http.StatusConflict, "plan.md changed since you read it: reload and read it again")
-		return
-	}
-	if probs := plan.Check(string(b)); len(probs) > 0 {
-		httpError(w, http.StatusConflict, "plan.md is incomplete")
-		return
-	}
-	a := board.Approval{State: board.Approved, Name: ws.Repo.ConfigValue("user.name"), Email: ws.Repo.ConfigValue("user.email"), PlanSHA: body.PlanSHA, Via: "app+" + humanauth.Method()}
-	if err := ws.Store.AppendApproval(t.ID, a); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	_ = ws.Store.AppendEvent(t.ID, board.Event{Type: "approved", Actor: "human:" + a.Email, Detail: map[string]any{"via": "app"}})
-	writeJSON(w, map[string]any{"approved": true})
-}
-
-// events streams "changed <repo>" whenever a repo's .truehand directory changes.
-func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		httpError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	ch := make(chan string, 16)
 	s.mu.Lock()
-	if s.clients == nil {
-		s.clients = map[chan string]bool{}
-	}
-	s.clients[ch] = true
+	hosts := s.Hosts
 	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.clients, ch)
-		s.mu.Unlock()
-	}()
-	fmt.Fprint(w, ": connected\n\n")
-	fl.Flush()
-	ping := time.NewTicker(20 * time.Second)
-	defer ping.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case repo := <-ch:
-			fmt.Fprintf(w, "event: changed\ndata: %s\n\n", repo)
-			fl.Flush()
-		case <-ping.C:
-			fmt.Fprint(w, ": ping\n\n")
-			fl.Flush()
+	for _, h := range hosts {
+		if strings.EqualFold(h, host) {
+			return true
 		}
 	}
+	return false
 }
 
-func (s *Server) broadcast(repo string) {
+// SetHosts replaces the accepted remote Host names.
+func (s *Server) SetHosts(hosts []string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for ch := range s.clients {
-		select {
-		case ch <- repo:
-		default:
-		}
-	}
+	s.Hosts = hosts
+	s.mu.Unlock()
 }
 
-// Watch polls each repo's .truehand tree (sizes and mtimes) and broadcasts changes.
-// Polling keeps the binary free of platform watchers and is cheap at this scale.
-func (s *Server) Watch(stop <-chan struct{}, every time.Duration) {
-	last := map[string]string{}
-	for {
-		for name, root := range s.names() {
-			sig := signature(filepath.Join(root, ".truehand"))
-			if prev, ok := last[name]; ok && prev != sig {
-				s.broadcast(name)
-			}
-			last[name] = sig
-		}
-		select {
-		case <-stop:
+// sameOrigin requires the Origin, when sent, to be this very Host. Its absence is checked
+// later, per credential.
+func sameOrigin(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	return o == "http://"+r.Host || o == "https://"+r.Host
+}
+
+func (s *Server) static() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
-		case <-time.After(every):
 		}
-	}
-}
-
-func signature(dir string) string {
-	var b strings.Builder
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+		host := r.Host
+		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://%s wss://%s; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'", host, host))
+		if s.Web == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			io.WriteString(w, placeholderPage)
+			return
 		}
-		if fi, err := d.Info(); err == nil {
-			fmt.Fprintf(&b, "%s %d %d\n", p, fi.Size(), fi.ModTime().UnixNano())
+		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if p == "" {
+			p = "index.html"
 		}
-		return nil
+		if fi, err := fs.Stat(s.Web, p); err != nil || fi.IsDir() {
+			// Client-side routes all load the app.
+			p = "index.html"
+		}
+		http.ServeFileFS(w, r, s.Web, p)
 	})
-	return evidence.HashBytes([]byte(b.String()))
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+const placeholderPage = `<!doctype html><meta charset="utf-8"><title>Truehand</title>
+<p>The Truehand web app is not built into this binary. Build it with <code>make app</code> (see README).</p>`
+
+// decode reads a JSON body into v, refusing unknown fields: no endpoint takes free-form
+// parameters it would silently ignore.
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, v any) { writeJSONStatus(w, http.StatusOK, v) }
+
+func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
@@ -418,6 +333,41 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func httpError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+var errStatus = map[error]int{
+	appstate.ErrNotFound:      http.StatusNotFound,
+	appstate.ErrExists:        http.StatusConflict,
+	agents.ErrNotFound:        http.StatusNotFound,
+	agents.ErrNotLive:         http.StatusConflict,
+	agents.ErrLive:            http.StatusConflict,
+	agents.ErrNothingToResume: http.StatusConflict,
+	agents.ErrClosed:          http.StatusConflict,
+}
+
+func fail(w http.ResponseWriter, err error) {
+	var br badRequest
+	var bz busy
+	switch {
+	case errors.As(err, &br):
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.As(err, &bz):
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	}
+	for e, code := range errStatus {
+		if errors.Is(err, e) {
+			httpError(w, code, err.Error())
+			return
+		}
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	httpError(w, http.StatusInternalServerError, err.Error())
 }

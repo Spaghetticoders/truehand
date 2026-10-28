@@ -281,18 +281,18 @@ func TestConcurrentHandsDistinctIDs(t *testing.T) {
 	}
 }
 
-// Round 2, A1: an agent cannot start serve with approvals; a failed OS auth means no approvals.
-func TestServeApprovalsNeedAHuman(t *testing.T) {
+// Round 2, A1 (app-v2): an agent cannot start the app server; inside a session serve is
+// read-only, and it never asks for the OS authentication when it starts.
+func TestServeRefusesTheAppInsideAnAgentSession(t *testing.T) {
 	s := newSandbox(t)
-	s.must("init", "--stack", "generic")
-	// serve blocks while it listens, so a missing refusal shows up as a timeout.
-	runServe := func() (int, string) {
+	t.Setenv("HOME", t.TempDir())
+	runServe := func(stdin string, args ...string) (int, string) {
 		type res struct {
 			code int
 			out  string
 		}
 		ch := make(chan res, 1)
-		go func() { c, o := s.run("", "serve", "--addr", "127.0.0.1:0"); ch <- res{c, o} }()
+		go func() { c, o := s.run(stdin, append([]string{"serve"}, args...)...); ch <- res{c, o} }()
 		select {
 		case r := <-ch:
 			return r.code, r.out
@@ -303,17 +303,21 @@ func TestServeApprovalsNeedAHuman(t *testing.T) {
 	}
 	old := core.AgentDetector
 	core.AgentDetector = func() int { return 4242 }
-	code, out := runServe()
+	code, out := runServe(`{"token":"`+strings.Repeat("a", 64)+`","shell_secret":"`+strings.Repeat("b", 64)+`"}`+"\n", "--app", "--addr", "127.0.0.1:0")
 	core.AgentDetector = old
-	if code == 0 || !strings.Contains(out, "--read-only") {
-		t.Fatalf("serve with approvals inside an agent session must fail: %d\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "inside an agent session") {
+		t.Fatalf("serve --app inside an agent session must fail: %d\n%s", code, out)
 	}
-	oldAuth := humanauth.Authenticate
-	humanauth.Authenticate = func(string) error { return errors.New("authentication cancelled") }
-	defer func() { humanauth.Authenticate = oldAuth }()
-	code, out = runServe()
-	if code == 0 || !strings.Contains(out, "cancelled") {
-		t.Fatalf("serve must not enable approvals without authentication: %d\n%s", code, out)
+	t.Setenv("TRUEHAND_ACTOR", "claude:x")
+	if code, out := runServe("", "--app", "--addr", "127.0.0.1:0"); code == 0 || !strings.Contains(out, "inside an agent session") {
+		t.Fatalf("TRUEHAND_ACTOR marks an agent too: %d\n%s", code, out)
+	}
+	t.Setenv("TRUEHAND_ACTOR", "")
+	if code, out := runServe("not json\n", "--app", "--addr", "127.0.0.1:0"); code == 0 || !strings.Contains(out, "stdin") {
+		t.Fatalf("--app without credentials on stdin: %d\n%s", code, out)
+	}
+	if code, out := runServe("", "--addr", "0.0.0.0:7878"); code == 0 || !strings.Contains(out, "127.0.0.1") {
+		t.Fatalf("serve must not listen on all interfaces: %d\n%s", code, out)
 	}
 }
 
