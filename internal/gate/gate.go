@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/config"
@@ -15,6 +17,7 @@ import (
 	"github.com/spaghetticoders/truehand/internal/gitx"
 	"github.com/spaghetticoders/truehand/internal/glob"
 	"github.com/spaghetticoders/truehand/internal/plan"
+	"github.com/spaghetticoders/truehand/internal/sign"
 )
 
 const (
@@ -47,6 +50,10 @@ type Env struct {
 	Changed  []string
 	Base     string
 	Events   []board.Event
+	// ApproversRef is the commit whose config lists the approvers; empty: the task's base ref.
+	ApproversRef string
+	// Approvers, when set, replaces BaseApprovers (the caller remembers it across tasks).
+	Approvers func() ([]config.Approver, error)
 }
 
 func NewEnv(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Task, base string) (*Env, error) {
@@ -58,6 +65,19 @@ func NewEnv(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Ta
 	if err != nil {
 		return nil, err
 	}
+	return newEnv(repo, cfg, store, t, base, fp, recs)
+}
+
+// NewEnvAt is NewEnv with the fingerprint of the task's files already computed on base.
+func NewEnvAt(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Task, base string, fp evidence.Fingerprint) (*Env, error) {
+	recs, err := evidence.Log{Store: store, Task: t.ID}.Records()
+	if err != nil {
+		return nil, err
+	}
+	return newEnv(repo, cfg, store, t, base, fp, recs)
+}
+
+func newEnv(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Task, base string, fp evidence.Fingerprint, recs []evidence.Record) (*Env, error) {
 	changed := make([]string, 0, len(fp.Files))
 	for p := range fp.Files {
 		changed = append(changed, p)
@@ -189,6 +209,18 @@ func checkHumanApproval(e *Env, _ config.Rule) Item {
 	if err != nil {
 		return fail("approvals: %v", err)
 	}
+	var approvers []config.Approver
+	if e.Approvers != nil {
+		approvers, err = e.Approvers()
+	} else {
+		approvers, err = BaseApprovers(e.Repo, e.Config, e.Task, e.ApproversRef)
+	}
+	if err != nil {
+		return fail("approvers: %v", err)
+	}
+	if len(approvers) > 0 {
+		return checkSignedApproval(e, approvers, apps, sha)
+	}
 	stale := false
 	for i := len(apps) - 1; i >= 0; i-- {
 		a := apps[i]
@@ -204,6 +236,239 @@ func checkHumanApproval(e *Env, _ config.Rule) Item {
 		return fail("plan.md changed after the last approval: a human must run `truehand approve %s` again", e.Task.ID)
 	}
 	return fail("waiting for a human: Approve plan on the task in the Truehand app, or `truehand approve %s` in a terminal", e.Task.ID)
+}
+
+// checkSignedApproval needs an approval of this plan signed by a key the base branch lists,
+// for this repo and task, with a nonce no earlier valid approval of the task used: a copy of a
+// signed approval counts as nothing, and neither a copy nor a forged record voids the original.
+func checkSignedApproval(e *Env, approvers []config.Approver, apps []board.Approval, sha string) Item {
+	repoID := RepoID(e.Repo)
+	used := map[string]bool{}
+	var found *config.Approver
+	var foundSig *sign.Signed
+	var last error
+	stale := false
+	for _, a := range apps {
+		if a.State != board.Approved {
+			continue
+		}
+		ap, err := VerifySignedApproval(repoID, approvers, e.Task.ID, a.PlanSHA, a.Sig)
+		if err == nil && used[a.Sig.Intent.Nonce] {
+			err = fmt.Errorf("nonce %s was already used by an earlier approval", a.Sig.Intent.Nonce)
+		}
+		if err == nil {
+			used[a.Sig.Intent.Nonce] = true
+		}
+		if a.PlanSHA != sha {
+			stale = true
+			continue
+		}
+		if err != nil {
+			last = err
+			continue
+		}
+		found, foundSig = ap, a.Sig
+	}
+	if found != nil {
+		return pass("approved by %s, signed with key %s (%s)", found.Name, found.ID, foundSig.Format)
+	}
+	if last != nil {
+		return fail("the approval of this plan.md is not validly signed by an approver: %v", last)
+	}
+	if stale {
+		return fail("plan.md changed after the last approval: an approver must sign the new plan again")
+	}
+	return fail("waiting for an approver: sign the approval of plan.md in the Truehand app (approvers are listed on the base branch)")
+}
+
+// VerifySignedApproval checks that s approves exactly this plan of this task in this repo and
+// carries a valid signature by one of approvers. It does not check the nonce's uniqueness.
+func VerifySignedApproval(repoID string, approvers []config.Approver, taskID, planSHA string, s *sign.Signed) (*config.Approver, error) {
+	return VerifySigned(repoID, approvers, sign.ActionApprovePlan, taskID, planSHA, "", s)
+}
+
+// VerifySigned checks that s authorises action on exactly this task, plan and head (empty
+// for approve-plan) in this repo, signed by one of approvers. Freshness and nonce reuse are
+// the caller's to check.
+func VerifySigned(repoID string, approvers []config.Approver, action, taskID, planSHA, head string, s *sign.Signed) (*config.Approver, error) {
+	if s == nil {
+		return nil, errors.New("not signed")
+	}
+	in := s.Intent
+	switch {
+	case in.Action != action:
+		return nil, fmt.Errorf("signed for %q, not %s", in.Action, action)
+	case in.Head != head:
+		return nil, errors.New("signed for another commit")
+	case in.Task != taskID:
+		return nil, fmt.Errorf("signed for task %q", in.Task)
+	case in.PlanSHA256 != planSHA:
+		return nil, errors.New("signed for another version of plan.md")
+	case in.Repo != repoID:
+		return nil, fmt.Errorf("signed for repo %q, this is %q", in.Repo, repoID)
+	}
+	var ap *config.Approver
+	for i := range approvers {
+		if approvers[i].ID == in.Approver {
+			ap = &approvers[i]
+		}
+	}
+	if ap == nil {
+		return nil, fmt.Errorf("%q is not an approver on the base branch", in.Approver)
+	}
+	pub, err := sign.ParsePublicKey(ap.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Verify(pub, ap.RPID); err != nil {
+		return nil, err
+	}
+	return ap, nil
+}
+
+// RepoID names the repo in signed intents: its origin URL, normalized, or without an origin
+// its root commit, so two repos never accept each other's signatures.
+func RepoID(repo *gitx.Repo) string {
+	if u := sign.NormalizeRepoURL(repo.ConfigValue("remote.origin.url")); u != "" {
+		return u
+	}
+	out, err := repo.Git("rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		return ""
+	}
+	roots := strings.Fields(out)
+	if len(roots) == 0 {
+		return ""
+	}
+	sort.Strings(roots)
+	return "root:" + roots[0]
+}
+
+// BaseApprovers returns the approvers whose keys count for a task; none means unsigned
+// approvals still count.
+//
+// In CI ref is the merge-base, and its list is the only one: what a branch says is ignored.
+// Locally the task's files are the branch's to edit, so signed approvals are required as soon
+// as any source lists approvers: the task's base ref, the configured base, the commit the task
+// started from, origin's default branch, local main or master, or the loaded config. Keys come
+// from all but the last together; the loaded config's keys count only while no other source
+// lists any (approvers being introduced on a branch). A source that does not resolve is
+// skipped; it is an error only when none of them resolves.
+func BaseApprovers(repo *gitx.Repo, cfg *config.Config, t *board.Task, ref string) ([]config.Approver, error) {
+	if ref != "" {
+		list, err := approversAt(repo, ref)
+		if err != nil {
+			return nil, err
+		}
+		if len(list) == 0 {
+			return cfg.Approvers, nil
+		}
+		return list, nil
+	}
+	var keys []config.Approver
+	seen := map[string]bool{}
+	add := func(list []config.Approver) {
+		for _, a := range list {
+			if k := a.ID + "\x00" + a.PublicKey; !seen[k] {
+				seen[k] = true
+				keys = append(keys, a)
+			}
+		}
+	}
+	anchors := []string{t.BaseRef, cfg.Base, t.Base, "refs/remotes/origin/HEAD", "origin/main", "origin/master", "refs/heads/main", "refs/heads/master"}
+	commits, err := resolveCommits(repo, anchors)
+	if err != nil {
+		return nil, err
+	}
+	resolved := false
+	for _, c := range commits {
+		if c == "" {
+			continue
+		}
+		list, err := approversAtCommit(repo, c)
+		if err != nil {
+			return nil, err
+		}
+		resolved = true
+		add(list)
+	}
+	if !resolved {
+		return nil, fmt.Errorf("none of the task's base refs (%s, %s) nor main, master or origin's resolves: cannot tell whether approvers are listed", orDash(t.BaseRef), orDash(cfg.Base))
+	}
+	if len(keys) == 0 {
+		return cfg.Approvers, nil
+	}
+	return keys, nil
+}
+
+// resolveCommits resolves refs to commit ids in one git call; "" for a ref that is empty, an
+// option or not a commit.
+func resolveCommits(repo *gitx.Repo, refs []string) ([]string, error) {
+	var in strings.Builder
+	for _, r := range refs {
+		if r == "" || r == gitx.EmptyTree || strings.HasPrefix(r, "-") || strings.ContainsAny(r, "\n\r") {
+			r = "-"
+		}
+		in.WriteString(r + "^{commit}\n")
+	}
+	out, err := repo.GitInput([]byte(in.String()), "cat-file", "--batch-check=%(objectname)")
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != len(refs) {
+		return nil, fmt.Errorf("git cat-file: %d answers for %d refs", len(lines), len(refs))
+	}
+	commits := make([]string, len(refs))
+	for i, l := range lines {
+		if sha1Re.MatchString(l) {
+			commits[i] = l
+		}
+	}
+	return commits, nil
+}
+
+var sha1Re = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+
+// The approvers a commit lists never change, so they are read once per process.
+var approversCache sync.Map
+
+func approversAtCommit(repo *gitx.Repo, commit string) ([]config.Approver, error) {
+	if v, ok := approversCache.Load(commit); ok {
+		return slices.Clone(v.([]config.Approver)), nil
+	}
+	list, err := approversAt(repo, commit)
+	if err != nil {
+		return nil, err
+	}
+	approversCache.Store(commit, slices.Clone(list))
+	return list, nil
+}
+
+var errRefNotFound = errors.New("ref not found")
+
+// approversAt reads the approvers of the config committed at ref; none when it has no config.
+func approversAt(repo *gitx.Repo, ref string) ([]config.Approver, error) {
+	if strings.HasPrefix(ref, "-") {
+		return nil, fmt.Errorf("invalid ref %q", ref)
+	}
+	commit, err := repo.Git("rev-parse", "--verify", "-q", ref+"^{commit}")
+	if err != nil {
+		return nil, fmt.Errorf("base ref %s: %w (in CI, fetch it)", ref, errRefNotFound)
+	}
+	obj := strings.TrimSpace(commit) + ":.truehand/config.yaml"
+	if _, err := repo.Git("cat-file", "-e", obj); err != nil {
+		return nil, nil
+	}
+	out, err := repo.Git("show", obj)
+	if err != nil {
+		return nil, err
+	}
+	c, err := config.Parse([]byte(out))
+	if err != nil {
+		return nil, fmt.Errorf("config on %s: %w", ref, err)
+	}
+	return c.Approvers, nil
 }
 
 // checkHand requires the latest record of a hand (per key) to pass, be intact and be fresh.
@@ -270,19 +535,21 @@ func checkReview(e *Env, r config.Rule) Item {
 	return pass("reviewed by %s, who did not work on the task", rec.Actor)
 }
 
-// Workers are everyone who built the task: the developer, whoever moved it to building, and
-// every actor that ran a hand other than review.
-func (e *Env) Workers() map[string]bool {
+func (e *Env) Workers() map[string]bool { return Workers(e.Task, e.Events, e.Evidence) }
+
+// Workers are everyone who built the task: the developer, whoever moved it to building or
+// edited it, and every actor that ran a hand other than review.
+func Workers(t *board.Task, events []board.Event, recs []evidence.Record) map[string]bool {
 	w := map[string]bool{}
-	if d := e.Task.Roles["developer"]; d != "" {
+	if d := t.Roles["developer"]; d != "" {
 		w[d] = true
 	}
-	for _, ev := range e.Events {
+	for _, ev := range events {
 		if ev.Type == "moved" && ev.To == board.Building || ev.Type == "edited" {
 			w[ev.Actor] = true
 		}
 	}
-	for _, rec := range e.Evidence {
+	for _, rec := range recs {
 		if rec.Hand != "review" && rec.Actor != "" {
 			w[rec.Actor] = true
 		}

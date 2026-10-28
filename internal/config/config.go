@@ -8,9 +8,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spaghetticoders/truehand/internal/sign"
 )
+
+var approverIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 const (
 	Dir  = ".truehand"
@@ -27,6 +33,28 @@ type Config struct {
 	Tests    Tests             `yaml:"tests,omitempty"`
 	Locks    Locks             `yaml:"locks,omitempty"`
 	Gates    map[string][]Rule `yaml:"gates"`
+	// Approvers are the keys whose signature a plan approval needs. Only the list on the base
+	// branch counts, so a branch cannot add its own key.
+	Approvers []Approver `yaml:"approvers,omitempty"`
+}
+
+// Approver is a human's signing key: ECDSA P-256, as a PEM PUBLIC KEY. RPID is the WebAuthn
+// relying party, for a key registered in a browser.
+type Approver struct {
+	ID        string `yaml:"id"`
+	Name      string `yaml:"name"`
+	PublicKey string `yaml:"public_key"`
+	RPID      string `yaml:"rp_id,omitempty"`
+}
+
+// Approver returns the approver with this id, or nil.
+func (c *Config) Approver(id string) *Approver {
+	for i := range c.Approvers {
+		if c.Approvers[i].ID == id {
+			return &c.Approvers[i]
+		}
+	}
+	return nil
 }
 
 // Tests tells hands which files are tests (everything else in the diff is "the fix").
@@ -176,6 +204,21 @@ func Parse(b []byte) (*Config, error) {
 			if r.Check == "" {
 				return nil, fmt.Errorf("config: gates.%s[%d]: missing check", state, i)
 			}
+		}
+	}
+	seen := map[string]bool{}
+	for i, a := range c.Approvers {
+		switch {
+		case !approverIDRe.MatchString(a.ID):
+			return nil, fmt.Errorf("config: approvers[%d]: id %q must be letters, digits, '.', '_' or '-'", i, a.ID)
+		case seen[a.ID]:
+			return nil, fmt.Errorf("config: approvers[%d]: duplicate id %q", i, a.ID)
+		case strings.TrimSpace(a.Name) == "":
+			return nil, fmt.Errorf("config: approvers[%d]: missing name", i)
+		}
+		seen[a.ID] = true
+		if _, err := sign.ParsePublicKey(a.PublicKey); err != nil {
+			return nil, fmt.Errorf("config: approvers[%d] (%s): %w", i, a.ID, err)
 		}
 	}
 	return &c, nil

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"time"
+
+	"github.com/spaghetticoders/truehand/internal/sign"
 )
 
 // Approval is a human sign-off on a task's plan. It binds to the plan's hash, so editing the
@@ -18,6 +20,8 @@ type Approval struct {
 	PlanSHA string    `json:"plan_sha256"`
 	Via     string    `json:"via"`
 	Nonce   string    `json:"nonce"`
+	// Sig is the signed intent of an approval made with an approver's key.
+	Sig *sign.Signed `json:"sig,omitempty"`
 }
 
 func (s *Store) AppendApproval(id string, a Approval) error {

@@ -60,6 +60,11 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 		ws = &cp
 		r.GatesFrom = baseRef
 	}
+	// Signed approvals are checked against the approvers listed at the merge-base, whatever
+	// base_ref a task.yaml on this branch names.
+	cp := *ws
+	cp.ApproversRef = mb
+	ws = &cp
 	out, err := ws.Repo.Git("diff", "--name-only", "--no-renames", mb, "HEAD")
 	if err != nil {
 		return nil, err
