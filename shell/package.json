@@ -1,0 +1,14 @@
+{
+  "name": "truehand-shell",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sidecar": "mkdir -p src-tauri/binaries && cp ../bin/truehand src-tauri/binaries/truehand-$(rustc --print host-tuple)",
+    "tauri": "tauri",
+    "build": "bun run sidecar && CI=true tauri build --bundles app,dmg",
+    "dev": "bun run sidecar && tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}

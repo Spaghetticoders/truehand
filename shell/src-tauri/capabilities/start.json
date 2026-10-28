@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "start",
+  "description": "The bundled start page starts or reuses the server; the server's own pages get their capability at runtime, for its exact origin.",
+  "windows": ["main"],
+  "permissions": ["core:default", "allow-start"]
+}

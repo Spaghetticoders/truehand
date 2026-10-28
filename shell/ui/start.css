@@ -1,0 +1,17 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1c244b;
+  --muted: #5b6382;
+  --accent: #61d6d7;
+  --panel: #f2f4f8;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #11152b; --fg: #eef0f7; --muted: #a3a9c2; --panel: #1c244b; }
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
+main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; box-sizing: border-box; text-align: center; }
+#msg { margin: 0; max-width: 520px; line-height: 1.45; }
+#detail { margin: 0; max-width: 560px; max-height: 40vh; overflow: auto; padding: 12px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; text-align: left; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+button { font: inherit; padding: 8px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--fg); cursor: pointer; }
