@@ -4,10 +4,22 @@
   import { t, type Key } from '../i18n/index.svelte'
   import { app, isOffline, NEEDS_HUMAN, passkeySigner, queuedFor } from '../stores/app.svelte'
   import { busy, confirmQueued, runAction } from '../stores/actions.svelte'
+  import { href } from '../stores/router.svelte'
+
+  function toRestack(e: MouseEvent) {
+    e.stopPropagation()
+    const el = document.getElementById('restack-title')
+    if (!el) return
+    e.preventDefault()
+    el.scrollIntoView({ block: 'center' })
+  }
 
   let { task, size = 'md', hide = [] }: { task: TaskSummary; size?: 'sm' | 'md'; hide?: TaskAction[] } = $props()
 
-  const action = $derived(task.primaryAction)
+  const AGENT: TaskAction[] = ['start-agent', 'resume-agent', 'start-review']
+  // A task others are stacked on is closed to agents; a broken stack is fixed by a restack first.
+  const action = $derived(task.tip && task.primaryAction && AGENT.includes(task.primaryAction) ? undefined : task.primaryAction)
+  const restackFirst = $derived(!!task.stackError && (!action || AGENT.includes(action)))
   const queued = $derived(queuedFor(task.projectId, task.id)[0])
   const canApprove = $derived(app.data?.me.canApprove ?? false)
   const signs = $derived(canApprove || (!!app.data && passkeySigner()))
@@ -38,7 +50,11 @@
   const QUIET: TaskAction[] = ['open-agent']
 </script>
 
-{#if queued}
+{#if restackFirst}
+  <a class="btn {size === 'sm' ? 'sm' : 'primary'}" href={href({ name: 'task', project: task.projectId, id: task.id, tab: 'description' })} onclick={toRestack}>
+    <Icon name="branch" size={size === 'sm' ? 14 : 16} />{t('restack.button')}
+  </a>
+{:else if queued}
   {#if canApprove}
     <button class="btn {size === 'sm' ? 'sm' : 'primary'}" onclick={(e) => (e.preventDefault(), e.stopPropagation(), confirmQueued(queued.id))}>
       <Icon name="shield" size={size === 'sm' ? 14 : 16} />{t('action.confirm-queued')}

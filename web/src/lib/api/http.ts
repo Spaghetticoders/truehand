@@ -1,4 +1,4 @@
-import type { ActResult, Api, ActionArgs, IntentRequest, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, SignedIntent, TaskAction } from './types'
+import type { ActResult, Api, ActionArgs, IntentRequest, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, RestackPreview, SignedIntent, TaskAction } from './types'
 
 export class ApiError extends Error {
   constructor(
@@ -28,6 +28,7 @@ const VIA_SHELL = [
   `PUT /api/projects/${SEG}/config`,
   `POST /api/projects/${SEG}/commit-config`,
   `POST /api/projects/${SEG}/push-base`,
+  `POST /api/projects/${SEG}/tasks/${SEG}/restack`,
   `POST /api/passkeys/enroll-code`,
   `DELETE /api/passkeys/${SEG}`,
   `POST /api/token/rotate`,
@@ -128,6 +129,8 @@ export class HttpApi implements Api {
     this.req<IntentRequest>('POST', `/api/projects/${enc(pid)}/config-intent`, { action, configSha256, approver })
   pushBase = (pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }) =>
     this.req<ActResult>('POST', `/api/projects/${enc(pid)}/push-base`, signedIntent ? { signedIntent } : { from: shown?.from, head: shown?.head })
+  restackPreview = (pid: string, id: string) => this.req<RestackPreview>('GET', `${this.t(pid, id)}/restack`)
+  restack = (pid: string, id: string, p: { point: string; stackedOn: string; ignoreHash?: string }) => this.req<Awaited<ReturnType<Api['restack']>>>('POST', `${this.t(pid, id)}/restack`, p)
   pushPreview = (pid: string) => this.req<Awaited<ReturnType<Api['pushPreview']>>>('GET', `/api/projects/${enc(pid)}/push-base`)
   taskIntent = (pid: string, id: string, action: TaskAction, approver: string) => this.req<IntentRequest>('POST', `${this.t(pid, id)}/intent`, { action, approver })
 

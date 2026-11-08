@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
+  import IgnoredFiles from './IgnoredFiles.svelte'
   import Modal from './Modal.svelte'
   import { t, type Key } from '../i18n/index.svelte'
   import { cancelPending, signing, signPending } from '../stores/sign.svelte'
@@ -61,6 +62,17 @@
     <div class="sheet">
       {#if p.context.title}
         <p class="ctx"><strong>{p.context.title}</strong>{#if p.context.branch}<code>{p.context.branch}</code>{/if}</p>
+      {/if}
+      {#if p.context.restack}
+        {@const rs = p.context.restack}
+        <dl class="summary">
+          <div><dt>{t('restack.task')}</dt><dd class="mono">{rs.task}</dd></div>
+          <div><dt>{t('restack.onTask')}</dt><dd><span class="mono">{rs.stackedOn}</span> · {t(`state.${rs.predState}`)}</dd></div>
+          <div><dt>{t('restack.point')}</dt><dd class="mono">{rs.from.slice(0, 7)} → {rs.point.slice(0, 7)}</dd></div>
+          <div><dt>{t('restack.covered')}</dt><dd class="mono">{rs.covered.join(', ')}</dd></div>
+          <div><dt>{t('restack.skippedShort')}</dt><dd>{rs.skipped.length}</dd></div>
+        </dl>
+        {#if rs.ignore?.length || rs.ignoreCount}<IgnoredFiles files={rs.ignore ?? []} on={rs.stackedOn} count={rs.ignoreCount} />{/if}
       {/if}
       {#if p.context.push}
         {@const push = p.context.push}
@@ -186,6 +198,28 @@
     font-size: 11.5px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .summary {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    font-size: 13px;
+  }
+  .summary div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+  .summary dt {
+    color: var(--text-2);
+  }
+  .summary dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .summary .mono {
+    font-family: var(--mono);
+    font-size: 12px;
   }
   .push {
     display: grid;

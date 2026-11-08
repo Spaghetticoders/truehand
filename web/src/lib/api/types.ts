@@ -140,6 +140,13 @@ export interface TaskSummary {
   readOnly: boolean
   updatedAt: string
   sessionIds: string[]
+  /** The task it is stacked on. */
+  stackedOn?: string
+  /** The stack no longer holds (technical): the task has no gates or proofs until restacked. */
+  stackError?: string
+  /** Tasks are stacked on this one: it is judged at this commit and no agent works on it again. */
+  tip?: string
+  stackedBy?: string[]
 }
 
 export interface TaskDetail extends TaskSummary {
@@ -196,7 +203,7 @@ export interface Me {
 
 export interface QueuedAction {
   id: string
-  kind: 'approve' | 'push' | 'pr' | 'config' | 'commit-config'
+  kind: 'approve' | 'push' | 'pr' | 'config' | 'commit-config' | 'restack'
   projectId: string
   taskId: string
   planSha256?: string
@@ -317,6 +324,27 @@ export interface IntentRequest {
   branch?: string
   /** push-base: what leaves, oldest commit first. */
   push?: PushPreview
+}
+
+/** GET …/restack: the task's base moved onto the commit that closes the task it is built on. */
+export interface RestackPreview {
+  task: string
+  /** The current base. */
+  from: string
+  point: string
+  stackedOn: string
+  predState: 'reviewed' | 'delivered'
+  predTitle: string
+  /** The chain of tasks below the point, starting at stackedOn. */
+  covered: string[]
+  /** Commits from the current base to the point: they become the predecessor's. */
+  skipped: { sha: string; subject: string }[]
+  /** Files in the working folder that none of the skipped commits made: moving the base declares them not the predecessor's. */
+  ignore?: string[]
+  /** May exceed ignore.length when the server shortens the list. A path ending in "/" is a whole folder. */
+  ignoreCount?: number
+  /** Names that list: the POST sends it back so the confirmation is for this list only. */
+  ignoreHash?: string
 }
 
 export interface PushPreview {
@@ -457,6 +485,10 @@ export interface Api {
   configIntent(pid: string, action: 'commit-config' | 'push-base', configSha256: string, approver?: string): Promise<IntentRequest>
   /** Without a signature, from and head are the preview's: the person's confirmation is for that push only. */
   pushBase(pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }): Promise<ActResult>
+  /** A restack the server can prove (409 no-restack-point when none). */
+  restackPreview(pid: string, id: string): Promise<RestackPreview>
+  /** Moves the task's base to the point shown: a human act (owner passkey, the Mac, or queued for it). */
+  restack(pid: string, id: string, p: { point: string; stackedOn: string; ignoreHash?: string }): Promise<ActResult & { task?: string; base?: string; stackedOn?: string }>
   /** What push-base would push now, and who may sign it. */
   pushPreview(pid: string): Promise<{ push?: PushPreview; approvers?: string[]; approverKeys?: ApproverKey[] }>
   /** The intent to sign for an action on a task, for a passkey outside the Mac app. */

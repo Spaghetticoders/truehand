@@ -464,7 +464,8 @@
     "pr": "Opening the PR",
     "config": "Rules change",
     "thisDevice": "this device",
-    "commit-config": "Rules commit"
+    "commit-config": "Rules commit",
+    "restack": "base move"
   },
   "machine": {
     "title": "Machines",
@@ -526,7 +527,8 @@
     "base-not-remote": "The base is not a remote branch (origin/…): from here only the remote is pushed to.",
     "signature-refused": "The server refused the signature: expired, already used, or no longer matching what you see. Try again.",
     "base-behind": "The remote moved ahead: use “Update from remote” on the project's board and try again.",
-    "push-base-refused": "Push refused: the base's history is not what was expected (for example it was rewritten). Check it with git; the reason is in the technical details."
+    "push-base-refused": "Push refused: the base's history is not what was expected (for example it was rewritten). Check it with git; the reason is in the technical details.",
+    "restack-moved": "The point changed after the preview: reload and check again."
   },
   "passkey": {
     "title": "Passkeys",
@@ -646,7 +648,8 @@
       "activate": "Turn Truehand on in a project",
       "machines": "Add or update a machine",
       "taskAction": "Action on a task",
-      "taskActionOf": "{action} · {task}"
+      "taskActionOf": "{action} · {task}",
+      "restack": "Move the task's base"
     },
     "ownerTitle": {
       "add-owner": "Make {label} an owner of the server",
@@ -719,5 +722,29 @@
     "keyMismatch": "Warning: this device created key {mine}, but the server stored {server}. Do not confirm it and tell whoever runs the server.",
     "keyFromServer": "Fingerprint from the server (not checked by this device)",
     "keyFromServerHint": "This browser does not expose the new key: the fingerprint comes from the server. Compare it with what the confirming owner sees."
+  },
+  "restack": {
+    "title": "Built on top of {on}",
+    "body": "This task is built on top of {on}, which is not in main yet. Move the base on top of {on} to test only this task's changes.",
+    "point": "New base",
+    "covered": "Tasks covered",
+    "onTask": "On top of task",
+    "button": "Move the base",
+    "done": "Base moved on top of {on}.",
+    "task": "Task",
+    "skipped": "Commits that move to that task ({n})",
+    "skippedShort": "Commits moving to the predecessor",
+    "ignore": {
+      "one": "The folder has 1 file that is not part of {on}'s commits ({examples}): moving the base confirms it is not {on}'s and it will be ignored.",
+      "other": "The folder has {n} files that are not part of {on}'s commits (e.g. {examples}): moving the base confirms they are not {on}'s and they will be ignored.",
+      "list": "Ignored files ({n})",
+      "more": "…and {n} more"
+    }
+  },
+  "stack": {
+    "on": "Stacked on {on}: its changes are measured from the point where {on} ends.",
+    "closed": "Other tasks are stacked on this one ({by}): it is judged up to commit {tip} and agents no longer work on it. Delivering, pushing and the PR remain.",
+    "broken": "The chain of tasks below this one no longer holds: no checks or proofs until the base is moved, and the server proposes no point right now.",
+    "brokenFix": "The chain of tasks below this one no longer holds: no checks or proofs until you move the base (below)."
   }
 }

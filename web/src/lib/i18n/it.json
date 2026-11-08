@@ -464,7 +464,8 @@
     "pr": "Apertura della PR",
     "config": "Modifica delle regole",
     "thisDevice": "questo dispositivo",
-    "commit-config": "Commit delle regole"
+    "commit-config": "Commit delle regole",
+    "restack": "spostamento della base"
   },
   "machine": {
     "title": "Macchine",
@@ -526,7 +527,8 @@
     "base-not-remote": "La base non è un ramo remoto (origin/…): da qui si spinge solo verso il remoto.",
     "signature-refused": "Firma rifiutata dal server: è scaduta, già usata o non corrisponde più a ciò che vedi. Riprova.",
     "base-behind": "Il remoto è andato avanti: usa «Aggiorna dal remoto» sulla bacheca del progetto e riprova.",
-    "push-base-refused": "Push rifiutato: la storia della base non è quella attesa (per esempio è stata riscritta). Controllala con git; il motivo è nei dettagli tecnici."
+    "push-base-refused": "Push rifiutato: la storia della base non è quella attesa (per esempio è stata riscritta). Controllala con git; il motivo è nei dettagli tecnici.",
+    "restack-moved": "Il punto è cambiato dopo l'anteprima: ricarica e controlla di nuovo."
   },
   "passkey": {
     "title": "Passkey",
@@ -646,7 +648,8 @@
       "activate": "Attiva Truehand in un progetto",
       "machines": "Aggiungi o aggiorna una macchina",
       "taskAction": "Azione su un task",
-      "taskActionOf": "{action} · {task}"
+      "taskActionOf": "{action} · {task}",
+      "restack": "Sposta la base del task"
     },
     "ownerTitle": {
       "add-owner": "Rendi {label} proprietaria del server",
@@ -719,5 +722,29 @@
     "keyMismatch": "Attenzione: questo dispositivo ha creato la chiave {mine}, ma il server ha registrato {server}. Non confermarla e avvisa chi gestisce il server.",
     "keyFromServer": "Impronta dal server (non verificata da questo dispositivo)",
     "keyFromServerHint": "Questo browser non espone la chiave appena creata: l'impronta viene dal server. Confrontala con quella che vedrà chi conferma."
+  },
+  "restack": {
+    "title": "Costruito sopra {on}",
+    "body": "Questo task è costruito sopra {on}, che non è ancora in main. Sposta la base sopra {on} per provare solo le modifiche di questo task.",
+    "point": "Nuova base",
+    "covered": "Task coperti",
+    "onTask": "Sopra il task",
+    "button": "Sposta la base",
+    "done": "Base spostata sopra {on}.",
+    "task": "Task",
+    "skipped": "Commit che passano a quel task ({n})",
+    "skippedShort": "Commit che passano al predecessore",
+    "ignore": {
+      "one": "Nella cartella c'è 1 file che non fa parte dei commit di {on} ({examples}): spostando la base confermi che non è suo e verrà ignorato.",
+      "other": "Nella cartella ci sono {n} file che non fanno parte dei commit di {on} (es. {examples}): spostando la base confermi che non sono suoi e verranno ignorati.",
+      "list": "Elenco dei file ignorati ({n})",
+      "more": "…e altri {n}"
+    }
+  },
+  "stack": {
+    "on": "Impilato sopra {on}: le sue modifiche si misurano dal punto in cui {on} si chiude.",
+    "closed": "Altri task sono impilati sopra questo ({by}): è valutato fino al commit {tip} e gli agenti non ci lavorano più. Restano consegna, push e PR.",
+    "broken": "La catena di task sotto questo non regge più: niente controlli né prove finché non si sposta la base, e al momento il server non propone un punto.",
+    "brokenFix": "La catena di task sotto questo non regge più: niente controlli né prove finché non sposti la base (qui sotto)."
   }
 }

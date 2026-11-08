@@ -6,6 +6,7 @@
   import Markdown from '../components/Markdown.svelte'
   import InvisibleNotice from '../components/InvisibleNotice.svelte'
   import ActionButton from '../components/ActionButton.svelte'
+  import RestackNotice from '../components/RestackNotice.svelte'
   import Modal from '../components/Modal.svelte'
   import { api, ApiError, TASK_STATES, type FilePatch, type TaskDetail } from '../api'
   import { t, timeAgo, type Key } from '../i18n/index.svelte'
@@ -225,6 +226,12 @@
       {#if detail.stale && !detail.merged}
         <p class="notice warn"><Icon name="alert" />{t('task.stale')}</p>
       {/if}
+      {#if detail.tip}
+        <p class="notice info"><Icon name="lock" />{t('stack.closed', { by: (detail.stackedBy ?? []).join(', '), tip: detail.tip.slice(0, 7) })}</p>
+      {:else if detail.stackedOn && !detail.stackError}
+        <p class="notice"><Icon name="branch" />{t('stack.on', { on: detail.stackedOn })}</p>
+      {/if}
+      {#if !readOnly && !detail.merged}<RestackNotice {projectId} {taskId} stackError={detail.stackError} />{/if}
     </header>
 
     <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -351,7 +358,7 @@
                 {#if live}
                   <button class="btn sm" onclick={() => signal('int')} title={t('session.interruptHint')}><Icon name="stop" size={13} />{t('session.interrupt')}</button>
                   <button class="btn sm ghost" onclick={() => signal('term')}>{t('session.terminate')}</button>
-                {:else if activeSession.resumable}
+                {:else if activeSession.resumable && !detail?.tip}
                   <button class="btn sm primary" onclick={resume}><Icon name="play" size={13} />{t('session.resume')}</button>
                 {/if}
               </div>

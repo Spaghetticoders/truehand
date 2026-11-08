@@ -22,7 +22,7 @@ export function toast(kind: Toast['kind'], text: string, href?: string) {
   setTimeout(() => (toasts.list = toasts.list.filter((x) => x.id !== id)), kind === 'ok' ? 4500 : 8000)
 }
 
-const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled', 'base-moved', 'not-only-config', 'base-diverged', 'base-unknown', 'base-behind', 'config-invalid', 'push-base-refused', 'nothing-to-push', 'base-not-remote', 'signature-refused'] as const
+const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled', 'base-moved', 'not-only-config', 'base-diverged', 'base-unknown', 'base-behind', 'config-invalid', 'push-base-refused', 'restack-moved', 'nothing-to-push', 'base-not-remote', 'signature-refused'] as const
 
 /** The server's technical reason behind a translated message, for a collapsed detail. */
 export function errorDetail(e: unknown): string | null {
@@ -141,7 +141,7 @@ export async function confirmQueued(qid: string) {
       r = checked(await api.confirmQueued(qid))
     } catch (e) {
       const q = app.data?.queued.find((x) => x.id === qid)
-      if (!q || q.kind === 'config' || q.kind === 'commit-config') throw e
+      if (!q || q.kind === 'config' || q.kind === 'commit-config' || q.kind === 'restack') throw e
       r = checked(await api.confirmQueued(qid, await signFor(e, q.projectId, q.taskId, QUEUED_ACTION[q.kind], q.planSha256)))
     }
     toast('ok', t('action.confirmed'), r.url)

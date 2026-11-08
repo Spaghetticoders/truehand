@@ -1,4 +1,5 @@
 import type {
+  RestackPreview,
   OwnerAction,
   ApproverKey,
   IntentRequest,
@@ -137,6 +138,12 @@ function decide(r: Row): { waitReason?: WaitReason; primaryAction?: TaskAction }
   return { waitReason }
 }
 
+// TH-21 was built on TH-15; its chain broke (a commit no task covers), so it waits for a restack.
+const stacks: Record<string, Partial<TaskSummary>> = {
+  'TH-21': { stackedOn: 'TH-15', stackError: 'stack: 4f2a9c1 changes lib/board/filter.dart, which no reviewed or delivered task in the chain covers' },
+  'TH-15': { tip: 'c0ffee1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b', stackedBy: ['TH-21'] },
+}
+
 function summary(r: Row): TaskSummary {
   const { description: _d, externalTicket: _e, scope: _s, comments, plan: _p, planSha256: _ps, planProblems: _pp, checks: _c, proofs: _pr, diff: _df, history: _h, approvals: _a, planReadyFact, deliverGateOpen: _g, patches: _pt, ...rest } = r
   return {
@@ -146,6 +153,7 @@ function summary(r: Row): TaskSummary {
     readOnly: !!r.branch && !r.worktree,
     sessionIds: sessions.filter((s) => s.projectId === r.projectId && s.taskId === r.id).map((s) => s.id),
     ...decide(r),
+    ...(r.projectId === 'p_9c0d1e2f' ? stacks[r.id] : undefined),
   }
 }
 
@@ -396,6 +404,44 @@ export class FixtureApi implements Api {
     const intent = this.intentFor(pid, action, 'config', configSha256, approver ?? APPROVERS[0].id, head)
     // ?nopreview plays an older server, to check the page refuses to sign blind.
     return /[?&]nopreview\b/.test(location.search) ? intent : { ...intent, push: { from: hex(20), head, commits, onlyConfig: !other } }
+  }
+
+  private restacked = new Set<string>()
+
+  async restackPreview(pid: string, id: string): Promise<RestackPreview> {
+    // TH-21 is built on TH-15, delivered but not merged yet.
+    if (pid !== 'p_9c0d1e2f' || id !== 'TH-21' || this.restacked.has(id)) throw new ApiError(409, 'no commit closes a reviewed or delivered task', 'no-restack-point')
+    return {
+      task: id,
+      from: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b',
+      point: 'c0ffee1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b',
+      stackedOn: 'TH-15',
+      predState: 'delivered',
+      predTitle: this.row(pid, 'TH-15').title,
+      covered: ['TH-15'],
+      skipped: [
+        { sha: '9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c', subject: 'feat(board): group tasks by client' },
+        { sha: '8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b', subject: 'test(board): grouping by client' },
+        { sha: 'c0ffee1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b', subject: 'docs(board): client groups' },
+      ],
+      ignore: ['ios/Podfile.lock', ...Array.from({ length: 12 }, (_, i) => `tool/wakeword/data/sample-${String(i).padStart(2, '0')}.wav`), 'tool/wakeword/train.py'],
+      ignoreCount: 14,
+      ignoreHash: 'a3f1c9e0b7d24e6f8a1c3e5b7d9f0a2c4e6b8d0f1a3c5e7b9d1f3a5c7e9b1d3f',
+    }
+  }
+
+  async restack(pid: string, id: string, p: { point: string; stackedOn: string; ignoreHash?: string }) {
+    await asOwner('POST', `/api/projects/${pid}/tasks/${id}/restack`, p)
+    if (!headless() && !canApprove()) {
+      const q = { id: rid('q_'), kind: 'restack' as const, projectId: pid, taskId: id, device: 'Galaxy S25', time: now() }
+      queued.push(q)
+      this.changed(pid)
+      return { ok: true, queued: true, queuedId: q.id }
+    }
+    this.restacked.add(id)
+    stacks[id] = { stackedOn: p.stackedOn }
+    this.changed(pid)
+    return { ok: true, task: id, base: p.point, stackedOn: p.stackedOn }
   }
 
   async pushPreview(pid: string) {
