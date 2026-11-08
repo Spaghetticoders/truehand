@@ -10,7 +10,7 @@ import (
 func TestApproveRefusedWhenApproversListed(t *testing.T) {
 	s := newSandbox(t)
 	_, pub := signtest.Key(t)
-	s.write(".truehand/config.yaml", testConfig+"approvers:\n  - id: mac\n    name: Emanuel\n    public_key: |\n      "+strings.ReplaceAll(strings.TrimSpace(pub), "\n", "\n      ")+"\n")
+	s.write(".truehand/config.yaml", testConfig+"approvers:\n  - id: mac\n    name: Alice\n    public_key: |\n      "+strings.ReplaceAll(strings.TrimSpace(pub), "\n", "\n      ")+"\n")
 	s.git("add", ".")
 	s.git("commit", "-q", "-m", "chore: approvers")
 	s.must("task", "new", "T-1", "--title", "x")

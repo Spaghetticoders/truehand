@@ -36,7 +36,7 @@ func TestServeAppStartsWithoutOSAuthAndKeepsOnlyHashes(t *testing.T) {
 	var stderr bytes.Buffer
 	done := make(chan int, 1)
 	go func() {
-		done <- runIn(s.dir, []string{"serve", "--app", "--addr", "127.0.0.1:0", "--repo", s.dir}, strings.NewReader(`{"token":"`+token+`","shell_secret":"`+shell+`"}`+"\n"), pw, &stderr)
+		done <- runIn(s.dir, []string{"serve", "--app", "--addr", "127.0.0.1:0", "--repo", s.dir}, strings.NewReader(`{"token":"`+token+`","shell_secret":"`+shell+`","revoked":[]}`+"\n"), pw, &stderr)
 		pw.Close()
 	}()
 	line, err := bufio.NewReader(pr).ReadString('\n')
@@ -99,7 +99,7 @@ func TestServeAppStartsWithoutOSAuthAndKeepsOnlyHashes(t *testing.T) {
 		t.Fatalf("--repo did not register the project: %s", b)
 	}
 
-	if code, out := s.run(`{"token":"`+token+`","shell_secret":"`+shell+`"}`+"\n", "serve", "--app", "--addr", "127.0.0.1:0"); code == 0 || !strings.Contains(out, "already running") {
+	if code, out := s.run(`{"token":"`+token+`","shell_secret":"`+shell+`","revoked":[]}`+"\n", "serve", "--app", "--addr", "127.0.0.1:0"); code == 0 || !strings.Contains(out, "already running") {
 		t.Fatalf("a second server must be refused by serve.lock: %d %s", code, out)
 	}
 

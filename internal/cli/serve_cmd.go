@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -69,22 +70,41 @@ func cmdPeerProxy(c *ctx, args []string) error {
 }
 
 // appCredentials is what the Mac app writes on serve's stdin: never in argv or the
-// environment, where other processes can read them.
+// environment, where other processes can read them. One JSON line, at most appLineMax.
 type appCredentials struct {
 	Token       string `json:"token"`
 	ShellSecret string `json:"shell_secret"`
 	// ApproverPublicKey is the app's signing key (PEM), when it already has one.
-	ApproverPublicKey string `json:"approver_public_key"`
+	ApproverPublicKey string `json:"mac_key"`
+	// Revoked are the owner passkeys revoked in the app's Keychain. Required: a server that
+	// never got them must not take any passkey for an owner.
+	Revoked []appstate.Revocation `json:"revoked"`
 }
 
+const appLineMax = 1 << 20
+
 func readAppCredentials(r io.Reader) (appCredentials, error) {
-	line, err := bufio.NewReader(io.LimitReader(r, 4096)).ReadString('\n')
+	line, err := bufio.NewReaderSize(io.LimitReader(r, appLineMax), 64<<10).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return appCredentials{}, err
 	}
-	var cr appCredentials
-	if err := json.Unmarshal([]byte(line), &cr); err != nil {
-		return appCredentials{}, errors.New(`--app reads {"token":"…","shell_secret":"…"} as one JSON line on stdin`)
+	if !strings.HasSuffix(line, "\n") && len(line) >= appLineMax {
+		return appCredentials{}, fmt.Errorf("--app: the line on stdin is longer than %d bytes", appLineMax)
+	}
+	var raw struct {
+		appCredentials
+		Revoked *[]appstate.Revocation `json:"revoked"`
+	}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return appCredentials{}, errors.New(`--app reads {"token":"…","shell_secret":"…","mac_key":"…","revoked":[…]} as one JSON line on stdin`)
+	}
+	cr := raw.appCredentials
+	if raw.Revoked == nil {
+		return appCredentials{}, errors.New(`--app: the Truehand app sent no "revoked" list: update the app (without it no passkey could be trusted as owner)`)
+	}
+	cr.Revoked = *raw.Revoked
+	if cr.Revoked == nil {
+		cr.Revoked = []appstate.Revocation{}
 	}
 	if len(cr.Token) < 32 || len(cr.ShellSecret) < 32 {
 		return appCredentials{}, errors.New("token and shell_secret must be at least 32 characters")
@@ -99,6 +119,7 @@ func cmdServe(c *ctx, args []string) error {
 	readOnly := fs.Bool("read-only", false, "serve boards only: no changes, no agent sessions")
 	web := fs.String("web", "", "serve the web app from this directory instead of the embedded one")
 	peer := fs.Bool("peer", false, "serve this machine to a Truehand Mac over ssh: only on ~/.truehand/app/serve.sock, no network port")
+	headless := fs.Bool("headless", false, "serve without the Mac app (Linux, through tailscale serve): an owner's passkey is the only human factor; no token is printed and stdin is not read")
 	var repos multiFlag
 	fs.Var(&repos, "repo", "register a repo as a project (repeatable)")
 	if _, _, err := parse(fs, args); err != nil {
@@ -106,6 +127,9 @@ func cmdServe(c *ctx, args []string) error {
 	}
 	if *peer && *app {
 		return errors.New("--peer and --app exclude each other")
+	}
+	if *headless && (*peer || *app) {
+		return errors.New("--headless excludes --peer and --app")
 	}
 	// A peer starts in the user's login shell, PATH included; the Mac app's sidecar does not.
 	if !*peer {
@@ -117,8 +141,8 @@ func cmdServe(c *ctx, args []string) error {
 	if e2eBuild && os.Getenv("TRUEHAND_E2E_SOCKET_GUARD") == "" {
 		serve.AgentProcess = func(int) bool { return false }
 	}
-	if inAgent && *app {
-		return errors.New("refusing to start the app server inside an agent session: the Truehand app starts it")
+	if inAgent && (*app || *headless) {
+		return errors.New("refusing to start the app server inside an agent session")
 	}
 	if inAgent && !*readOnly {
 		fmt.Fprintln(c.stderr, "truehand serve: inside an agent session, serving read-only")
@@ -145,18 +169,20 @@ func cmdServe(c *ctx, args []string) error {
 
 	var token, shellHash string
 	var macKey *ecdsa.PublicKey
+	var macRevoked []appstate.Revocation
 	if *app {
 		cr, err := readAppCredentials(c.stdin)
 		if err != nil {
 			return err
 		}
-		token, shellHash = cr.Token, appstate.HashSecret(cr.ShellSecret)
+		token, shellHash, macRevoked = cr.Token, appstate.HashSecret(cr.ShellSecret), cr.Revoked
 		if cr.ApproverPublicKey != "" {
-			if macKey, err = sign.ParsePublicKey(cr.ApproverPublicKey); err != nil {
-				return fmt.Errorf("approver_public_key: %w", err)
+			if macKey, err = sign.ParseP256PublicKey(cr.ApproverPublicKey); err != nil {
+				return fmt.Errorf("mac_key: %w", err)
 			}
 		}
 	} else if !*peer {
+		// A headless server's token is never shown: no one holds it, the passkey is the way in.
 		token = appstate.NewSecret()
 	}
 	if token != "" {
@@ -190,8 +216,16 @@ func cmdServe(c *ctx, args []string) error {
 	}
 	srv := &serve.Server{
 		Store: store, ReadOnly: *readOnly, Version: Version, ShellSecretHash: shellHash,
-		TruehandBin: filepath.Dir(self), WorktreesDir: filepath.Join(home, ".truehand", "worktrees"),
-		Web: truehand.WebDist(), Peer: *peer, MacKey: macKey,
+		TruehandBin: hookBinDir(self, filepath.Join(dir, "bin"), c.stderr), WorktreesDir: filepath.Join(home, ".truehand", "worktrees"),
+		Web: truehand.WebDist(), Peer: *peer, MacKey: macKey, Headless: *headless,
+	}
+	if *app {
+		srv.SetMacRevoked(macRevoked)
+	}
+	if *headless {
+		srv.HumanAuth = func(string) error {
+			return errors.New("a headless server never asks the OS: confirm with an owner's passkey")
+		}
 	}
 	if *web != "" {
 		if _, err := os.Stat(*web); err != nil {
@@ -227,6 +261,13 @@ func cmdServe(c *ctx, args []string) error {
 			fmt.Fprintf(c.stderr, "truehand serve: remote access off: %v\n", err)
 		} else {
 			srv.SetHosts(hosts)
+		}
+		// Headless, tailscale serve is the way in: accept this machine's MagicDNS name even
+		// before anyone could confirm the setting.
+		if *headless && st.Settings.Remote.Mode == "off" {
+			if self, ok := tailscaleSelfInfo(); ok && self.DNSName != "" {
+				srv.SetHosts([]string{strings.TrimSuffix(self.DNSName, ".")})
+			}
 		}
 		defer remote.close()
 	}
@@ -265,6 +306,12 @@ func cmdServe(c *ctx, args []string) error {
 	case *app:
 		url := "http://" + ln.Addr().String()
 		_ = json.NewEncoder(c.stdout).Encode(map[string]any{"ready": true, "url": url, "pid": os.Getpid()})
+	case *headless:
+		owner := "no owner passkey yet: run `sudo truehand passkey bootstrap` on this machine's terminal"
+		if srv.HasOwner() {
+			owner = "owner passkey registered"
+		}
+		fmt.Fprintf(c.stdout, "Truehand %s serving %d project(s) headless on http://%s (%s)\n", Version, len(st.Projects), ln.Addr(), owner)
 	default:
 		mode := ""
 		if *readOnly {
@@ -370,9 +417,53 @@ func (ra *remoteAccess) apply(rm appstate.Remote) ([]string, error) {
 func toolDirs() []string {
 	dirs := []string{"/opt/homebrew/bin", "/usr/local/bin"}
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".local", "bin"))
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"), filepath.Join(home, ".npm-global", "bin"))
+		if d := nvmBin(home); d != "" {
+			dirs = append(dirs, d)
+		}
 	}
 	return dirs
+}
+
+// nvmBin is the bin directory of nvm's newest installed Node, where npm puts claude.
+func nvmBin(home string) string {
+	if d := os.Getenv("NVM_BIN"); d != "" {
+		return d
+	}
+	dirs, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "v*", "bin"))
+	best, bestV := "", []int(nil)
+	for _, d := range dirs {
+		v := semver(filepath.Base(filepath.Dir(d)))
+		if v != nil && (bestV == nil || lessVersion(bestV, v)) {
+			best, bestV = d, v
+		}
+	}
+	return best
+}
+
+func semver(s string) []int {
+	parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	v := make([]int, 3)
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		v[i] = n
+	}
+	return v
+}
+
+func lessVersion(a, b []int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }
 
 // completePath appends the tool directories missing from PATH, so gh, claude, tailscale
@@ -567,4 +658,26 @@ func sameDir(a, b string) bool {
 	ra, err1 := filepath.EvalSymlinks(a)
 	rb, err2 := filepath.EvalSymlinks(b)
 	return err1 == nil && err2 == nil && ra == rb
+}
+
+// hookBinDir is the directory put first on PATH for git, where `truehand` is this very
+// binary: the repo's hooks run `truehand`, and an older one elsewhere on PATH would check
+// pushes with old rules (or not know the config). A binary not named truehand gets a link in
+// private, the app's own bin directory.
+func hookBinDir(self, private string, stderr io.Writer) string {
+	if filepath.Base(self) == "truehand" {
+		return filepath.Dir(self)
+	}
+	link := filepath.Join(private, "truehand")
+	if cur, err := os.Readlink(link); err == nil && cur == self {
+		return private
+	}
+	if err := os.MkdirAll(private, 0o700); err == nil {
+		_ = os.Remove(link)
+		if err = os.Symlink(self, link); err == nil {
+			return private
+		}
+		fmt.Fprintf(stderr, "truehand serve: git hooks may find another truehand: %v\n", err)
+	}
+	return filepath.Dir(self)
 }

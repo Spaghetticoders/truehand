@@ -303,7 +303,7 @@ func TestServeRefusesTheAppInsideAnAgentSession(t *testing.T) {
 	}
 	old := core.AgentDetector
 	core.AgentDetector = func() int { return 4242 }
-	code, out := runServe(`{"token":"`+strings.Repeat("a", 64)+`","shell_secret":"`+strings.Repeat("b", 64)+`"}`+"\n", "--app", "--addr", "127.0.0.1:0")
+	code, out := runServe(`{"token":"`+strings.Repeat("a", 64)+`","shell_secret":"`+strings.Repeat("b", 64)+`","revoked":[]}`+"\n", "--app", "--addr", "127.0.0.1:0")
 	core.AgentDetector = old
 	if code == 0 || !strings.Contains(out, "inside an agent session") {
 		t.Fatalf("serve --app inside an agent session must fail: %d\n%s", code, out)
