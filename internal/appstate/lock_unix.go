@@ -38,3 +38,20 @@ func (s *Store) Lock() (release func(), err error) {
 		f.Close()
 	}, nil
 }
+
+// flockFile holds an exclusive lock on path (created 0600) until the returned func runs: a
+// read-change-write of a state file is one step even across processes.
+func flockFile(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}

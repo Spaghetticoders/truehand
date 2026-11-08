@@ -42,7 +42,7 @@ type Store struct {
 
 // Open creates dir (0700) and tightens its mode if it already existed.
 func Open(dir string) (*Store, error) {
-	for _, d := range []string{dir, filepath.Join(dir, "scrollback"), filepath.Join(dir, "hooks")} {
+	for _, d := range []string{dir, filepath.Join(dir, "scrollback"), filepath.Join(dir, "hooks"), filepath.Join(dir, "locks")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -108,11 +108,17 @@ func load[T any](s *Store, name string, init func(*T)) (*T, error) {
 	return v, nil
 }
 
-// update reads, changes and writes one file under its mutex; nothing is written when fn fails.
+// update reads, changes and writes one file under its mutex and a lock file, so no other
+// process interleaves; nothing is written when fn fails.
 func update[T any](s *Store, name string, init func(*T), fn func(*T) error) error {
 	m := s.lockFile(name)
 	m.Lock()
 	defer m.Unlock()
+	unlock, err := flockFile(filepath.Join(s.Dir, "locks", name+".lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	v := new(T)
 	if err := read(s, name, v); err != nil {
 		return err
