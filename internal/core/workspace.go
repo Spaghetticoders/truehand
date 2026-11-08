@@ -35,6 +35,8 @@ type memo struct {
 	fp   map[string]evidence.Fingerprint
 	git  map[string]gitResult
 	appr map[string][]config.Approver
+	// tasks is the board as first listed in the session.
+	tasks []*board.Task
 }
 
 type gitResult struct {
@@ -74,17 +76,27 @@ func (w *Workspace) session() *Workspace {
 
 // fingerprint is evidence.Compute for the task's scope on base, remembered in a session.
 func (w *Workspace) fingerprint(t *board.Task, base string) (evidence.Fingerprint, error) {
-	if w.memo == nil {
+	tip, err := w.TipOf(t)
+	if err != nil {
+		return evidence.Fingerprint{}, err
+	}
+	compute := func() (evidence.Fingerprint, error) {
+		if tip != "" {
+			return evidence.ComputeAt(w.Repo, base, tip, t.Scope)
+		}
 		return evidence.Compute(w.Repo, base, t.Scope)
 	}
-	key := base + "\x00" + strings.Join(t.Scope, "\x00")
+	if w.memo == nil {
+		return compute()
+	}
+	key := base + "\x00" + tip + "\x00" + strings.Join(t.Scope, "\x00")
 	w.memo.mu.Lock()
 	fp, ok := w.memo.fp[key]
 	w.memo.mu.Unlock()
 	if ok {
 		return fp, nil
 	}
-	fp, err := evidence.Compute(w.Repo, base, t.Scope)
+	fp, err = compute()
 	if err != nil {
 		return fp, err
 	}
@@ -192,10 +204,15 @@ func (w *Workspace) NewTask(id, title, source string, scope ...string) (*board.T
 		ID: id, Title: title, Source: source, State: board.Planned,
 		Base: w.Repo.Base(w.Config.Base), BaseRef: w.Config.Base, Scope: scope, Created: now, Updated: now,
 	}
+	w.stackOnCreate(t)
 	if err := w.Store.Create(t); err != nil {
 		return nil, err
 	}
-	if err := w.Store.AppendEvent(id, board.Event{Type: "created", Actor: w.Actor(), To: board.Planned, Detail: map[string]any{"base": t.Base}}); err != nil {
+	detail := map[string]any{"base": t.Base}
+	if t.StackedOn != "" {
+		detail["stacked_on"] = t.StackedOn
+	}
+	if err := w.Store.AppendEvent(id, board.Event{Type: "created", Actor: w.Actor(), To: board.Planned, Detail: detail}); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -220,7 +237,7 @@ func (w *Workspace) BaseOf(t *board.Task) (string, error) {
 	if w.memo == nil {
 		return w.baseOf(t)
 	}
-	key := t.BaseRef + "\x00" + t.Base
+	key := t.BaseRef + "\x00" + t.Base + "\x00" + t.StackedOn
 	w.memo.mu.Lock()
 	b, ok := w.memo.base[key]
 	w.memo.mu.Unlock()
@@ -238,6 +255,9 @@ func (w *Workspace) BaseOf(t *board.Task) (string, error) {
 }
 
 func (w *Workspace) baseOf(t *board.Task) (string, error) {
+	if t.StackedOn != "" {
+		return w.stackBase(t)
+	}
 	if t.BaseRef == "" || t.Base == gitx.EmptyTree {
 		return t.Base, nil
 	}
@@ -284,6 +304,9 @@ func (w *Workspace) Check(t *board.Task, target board.State) (gate.Result, error
 	}
 	env.ApproversRef = w.ApproversRef
 	env.Approvers = func() ([]config.Approver, error) { return w.Approvers(t) }
+	if tip, ignore, err := w.tipOf(t); err == nil && tip != "" {
+		env.AtPoint, env.Ignore = true, ignore
+	}
 	return gate.Evaluate(env, target), nil
 }
 

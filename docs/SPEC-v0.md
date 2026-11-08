@@ -78,6 +78,22 @@ gates:
 `when.changed` globs are matched against the task's diff (base..working tree, untracked
 files included, `.truehand/` excluded).
 
+**Stacked tasks.** A task started on a branch whose earlier commits belong to another task
+not yet on the base branch is stacked on it: `task.yaml` records `stacked_on: <id>` and a
+`base` at the commit that closes that task, and its diff starts there. This happens only when
+every commit between the base branch and that point is covered by reviewed or delivered tasks
+(each file by the task that last changed it, within its scope) whose gates pass at that
+point; a new task stacks at HEAD on its own, an existing one with `truehand task restack
+<id>` (humans only: terminal and OS authentication). The task stacked on is then judged at
+that point, not on the working tree, and its hands no longer run. When the stack stops
+holding (history rewritten, a predecessor moved back, a commit nobody covers), the stacked
+task has no base and says so; it never falls back to a base that hides commits. At the point
+every input of the task's evidence must match, scope or not: files its working tree held
+besides its commits (another task's work, untracked leftovers) block the stack, unless a human
+restacking reads their list and accepts exactly it (`stacked_ignore`, and a `restacked` event
+by a `human:` actor naming the list's hash). CI checks the chain like any other tasks: each
+covers its own files, as they are at HEAD.
+
 ### Evidence and freshness
 
 `evidence/index.jsonl` is append-only. Each record stores the hand, verdict, actor, the
@@ -181,7 +197,7 @@ In a repo whose base branch lists `approvers` in `.truehand/config.yaml`, the di
 enough: approving a plan, pushing and opening a PR need an intent signed with one of those
 keys (ECDSA P-256; the Mac app keeps its key in the Secure Enclave and every signature asks
 for Touch ID). The approvers are read from the base branch, never from the task's branch;
-CI reads them at the merge-base. `truehand approve` then refuses and points to the app.
+CI reads them at the tip of the base. `truehand approve` then refuses and points to the app.
 Format and anchors: [config.md](config.md#signed-approvals). The same factor guards pushes
 and PRs opened from the app, and every action that could remove it (`PUT …/config`,
 commit-config, pairing, remote access, revoking devices).
@@ -309,6 +325,11 @@ commit-config, pairing, remote access, revoking devices).
   The command shows the key's fingerprint and asks to confirm it: compare it with the
   fingerprint shown for this passkey in Settings → Passkeys on a device you still have before
   typing `yes` (and skip `--yes`).
+- A restack that ignores files counts only with a `restacked` event by a `human:` actor, but
+  that event is a line in a file, like an approval in a repo without approvers: an agent
+  determined to forge it can. CI does not depend on it (it checks each file at HEAD). In repos
+  with approvers it should become an intent signed by an approver over the list's hash
+  (future work).
 - Revoking a passkey at the server does not remove it from the repos' `approvers`: as long as
   a base branch lists its key it signs for that project, including in CI. Remove it from each
   project's rules too (the app reminds you).

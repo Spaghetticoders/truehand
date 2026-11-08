@@ -38,6 +38,7 @@ func init() {
 	register("task show", "Show a task, its gate for the next state and its evidence", cmdTaskShow)
 	register("board", "Print the whole board of this repo (for apps; use --json)", cmdBoard)
 	register("task use", "Set the active task for this clone", cmdTaskUse)
+	register("task restack", "Start a task's change after the reviewed task it is stacked on (humans only: needs a terminal)", cmdTaskRestack)
 	register("task move", "Move a task to a state (forward moves must pass the gate)", cmdTaskMove)
 	register("gate check", "Evaluate a gate without moving the task", cmdGateCheck)
 	register("plan init", "Write the plan.md template for a task", cmdPlanInit)
@@ -337,6 +338,57 @@ func cmdBoard(c *ctx, args []string) error {
 		return err
 	}
 	return printJSON(c.stdout, b)
+}
+
+func cmdTaskRestack(c *ctx, args []string) error {
+	fs := flag.NewFlagSet("task restack", flag.ContinueOnError)
+	pos, _, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return errors.New("usage: truehand task restack <id>")
+	}
+	ws, err := c.workspace()
+	if err != nil {
+		return err
+	}
+	if ws.InAgentSession() || os.Getenv("TRUEHAND_ACTOR") != "" {
+		return errors.New("restack runs in your own terminal, not inside an agent session (or with TRUEHAND_ACTOR set). Agents cannot restack")
+	}
+	if !isTTY() {
+		return errors.New("restack needs a human at a terminal (stdin is not a TTY). Agents cannot restack")
+	}
+	t, err := ws.ResolveTask(pos[0])
+	if err != nil {
+		return err
+	}
+	plan, err := ws.PlanRestack(t.ID)
+	if err != nil {
+		return err
+	}
+	point, pred := plan.Point, plan.Pred
+	fmt.Fprintf(c.stdout, "%s would start at %s, after %s (%s): the commits up to there are %s's, the ones after are %s's.\n", t.ID, point[:12], pred.ID, pred.State, pred.ID, t.ID)
+	if len(plan.Ignore) > 0 {
+		fmt.Fprintf(c.stdout, "%s's evidence also saw %d file(s) in its folder that are not in its commits; they will be ignored:\n", pred.ID, len(plan.Ignore))
+		for _, f := range plan.Ignore {
+			fmt.Fprintf(c.stdout, "  %s\n", core.PrintableText(f))
+		}
+	}
+	fmt.Fprint(c.stdout, "Restack? Type the task id to confirm: ")
+	line, _ := bufio.NewReader(c.stdin).ReadString('\n')
+	if strings.TrimSpace(line) != t.ID {
+		return errors.New("not restacked")
+	}
+	if err := humanauth.Authenticate(fmt.Sprintf("Truehand asks you to restack task %s on task %s at commit %s, ignoring %d file(s).", t.ID, pred.ID, point[:12], len(plan.Ignore))); err != nil {
+		return fmt.Errorf("not restacked: %w", err)
+	}
+	actor := "human:" + ws.Repo.ConfigValue("user.email")
+	if _, err := ws.RestackWith(t.ID, point, pred.ID, plan.IgnoreHash, actor, map[string]any{"via": humanauth.Method()}); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.stdout, "Restacked: %s now starts at %s, on %s.\n", t.ID, point[:12], pred.ID)
+	return nil
 }
 
 func cmdTaskUse(c *ctx, args []string) error {

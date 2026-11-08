@@ -9,7 +9,6 @@ import (
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/config"
 	"github.com/spaghetticoders/truehand/internal/core"
-	"github.com/spaghetticoders/truehand/internal/evidence"
 	"github.com/spaghetticoders/truehand/internal/gate"
 )
 
@@ -123,15 +122,20 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 			}
 		}
 		if tr.Pass {
-			base, err := ws.BaseOf(t)
+			fp, err := ws.Fingerprint(t)
 			if err != nil {
 				return nil, err
 			}
-			fp, err := evidence.Compute(ws.Repo, base, t.Scope)
+			// A task judged at an earlier commit (another is stacked on it) covers a file only
+			// as it is checked out: one changed since must be covered by a later task.
+			now, err := ws.Repo.HashFiles(keys(fp.Files))
 			if err != nil {
 				return nil, err
 			}
-			for p := range fp.Files {
+			for p, h := range fp.Files {
+				if now[p] != h {
+					continue
+				}
 				covered[p] = true
 				tr.Covers = append(tr.Covers, p)
 			}
@@ -149,4 +153,13 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 	}
 	r.Pass = len(r.Problems) == 0
 	return r, nil
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

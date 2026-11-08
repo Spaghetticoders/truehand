@@ -55,7 +55,6 @@ func TestE2EBuildIsSeparate(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	realHome, _ := os.UserHomeDir()
 	if out, err := run(e2e, realHome); err == nil || !strings.Contains(out, "temporary directory") {
 		t.Fatalf("E2E build with a real HOME: %v %s", err, out)
 	}

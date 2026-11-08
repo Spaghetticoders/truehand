@@ -4,7 +4,8 @@
 version: 0
 
 # Branch the task diff is measured against. A new task's base is the merge-base of HEAD
-# with this ref, or HEAD itself if the ref is missing or HEAD is on it.
+# with this ref, or HEAD itself if the ref is missing or HEAD is on it, or HEAD when the
+# commits before it close reviewed tasks (stacked tasks, see below).
 base: origin/main
 
 commands:
@@ -209,6 +210,20 @@ Without a scope a task owns every file changed since its base, which is right fo
 per task. When several tasks share a branch (trunk-based work), give each a scope: its
 fingerprint, `test-proof` reverts, `when.changed` rules and CI coverage then consider only
 its files, and the other tasks' work never makes its evidence stale.
+
+## Stacked tasks
+
+When a branch carries a reviewed task not yet merged (COACH-1) and a new task continues on top
+of it (COACH-2), the new task is stacked: its `task.yaml` gets `stacked_on: COACH-1` and a
+`base` at the commit that closes COACH-1, so its diff, `test-proof` reverts and scope hold only
+its own work. `task new` does this by itself when every commit since the base branch is
+covered by reviewed or delivered tasks whose gates pass at HEAD. A task created before that
+is moved with `truehand task restack COACH-2`, from your own terminal: it finds the latest
+commit that closes a reviewed task, shows it, and asks to confirm and authenticate; commits
+after that point stay COACH-2's. If COACH-1's evidence saw files its commits do not have
+(another task's changes in the folder, untracked files), they are listed and ignored only if
+you accept that list. COACH-1 is then judged at that commit and its hands no longer
+run; CI accepts the pair when both are delivered, each covering its own files.
 
 ## Identity
 

@@ -75,6 +75,12 @@ type Task struct {
 	// against. The effective base is recomputed from BaseRef on every check (see core).
 	Base    string `yaml:"base" json:"base"`
 	BaseRef string `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	// StackedOn names the task whose commits Base closes: the task's diff starts at Base,
+	// and that task is judged at Base (see core).
+	StackedOn string `yaml:"stacked_on,omitempty" json:"stacked_on,omitempty"`
+	// StackedIgnore lists files the task stacked on had in its working tree, not in its commits,
+	// that a human accepted to ignore when restacking (see core).
+	StackedIgnore []string `yaml:"stacked_ignore,omitempty" json:"stacked_ignore,omitempty"`
 	// Scope lists the globs of the files this task owns; empty means every changed file.
 	Scope   []string          `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Roles   map[string]string `yaml:"roles,omitempty" json:"roles,omitempty"`

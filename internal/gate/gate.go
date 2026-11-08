@@ -54,6 +54,20 @@ type Env struct {
 	ApproversRef string
 	// Approvers, when set, replaces BaseApprovers (the caller remembers it across tasks).
 	Approvers func() ([]config.Approver, error)
+	// AtPoint: Now is the task at a commit (another task is stacked on it), not the working
+	// tree; every input of its evidence must match there, but those in Ignore.
+	AtPoint bool
+	// Ignore, at a point, lists the inputs a human accepted to ignore there: files the working
+	// tree held when a hand ran that are not in the task's commits (see core.RestackWith).
+	Ignore []string
+}
+
+// inputs is what of rec's inputs the freshness of the task's evidence depends on.
+func (e *Env) inputs(rec evidence.Record) evidence.Fingerprint {
+	if !e.AtPoint || len(e.Ignore) == 0 {
+		return rec.Inputs
+	}
+	return rec.Inputs.Only(func(p string) bool { return !slices.Contains(e.Ignore, p) })
 }
 
 func NewEnv(repo *gitx.Repo, cfg *config.Config, store *board.Store, t *board.Task, base string) (*Env, error) {
@@ -572,7 +586,7 @@ func checkHand(e *Env, r config.Rule, hand string) Item {
 		if err := log.Integrity(rec); err != nil {
 			return fail("%v", err)
 		}
-		if stale := rec.Inputs.Stale(e.Now); len(stale) > 0 {
+		if stale := e.inputs(rec).Stale(e.Now); len(stale) > 0 {
 			return fail("%s is stale: changed since it ran: %s", label, short(stale))
 		}
 	}
@@ -660,7 +674,7 @@ func checkAllFresh(e *Env, _ config.Rule) Item {
 		if err := log.Integrity(rec); err != nil {
 			return fail("%v", err)
 		}
-		if stale := rec.Inputs.Stale(e.Now); len(stale) > 0 {
+		if stale := e.inputs(rec).Stale(e.Now); len(stale) > 0 {
 			return fail("%s is stale: changed since it ran: %s", rec.ID, short(stale))
 		}
 	}

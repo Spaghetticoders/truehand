@@ -52,6 +52,13 @@ func Begin(ws *core.Workspace, t *board.Task, hand, key string) (*Session, error
 	if err != nil {
 		return nil, err
 	}
+	// A task another one is stacked on is judged at that point: evidence from the working
+	// tree would describe a later content than the one its gates check.
+	if tip, err := ws.TipOf(t); err != nil {
+		return nil, err
+	} else if tip != "" {
+		return nil, fmt.Errorf("task %s is closed at %s, where another task is stacked on it: its hands no longer run", t.ID, tip[:12])
+	}
 	fp, err := evidence.Compute(ws.Repo, base, t.Scope)
 	if err != nil {
 		return nil, err

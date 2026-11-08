@@ -78,6 +78,64 @@ func Compute(repo *gitx.Repo, base string, scope []string) (Fingerprint, error) 
 	return Fingerprint{Digest: digest(hashes), Files: hashes}, nil
 }
 
+// ComputeAt is Compute for the change from base to the commit tip, read from git objects:
+// what the working tree held when tip was committed, without later edits.
+func ComputeAt(repo *gitx.Repo, base, tip string, scope []string) (Fingerprint, error) {
+	out, err := repo.Git("diff", "--name-only", "--no-renames", "-z", base, tip)
+	if err != nil {
+		return Fingerprint{}, err
+	}
+	var files []string
+	for _, f := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
+		if f == "" || excludedPath(f) || (len(scope) > 0 && !glob.MatchAny(scope, f)) {
+			continue
+		}
+		files = append(files, f)
+	}
+	hashes := make(map[string]string, len(files))
+	for _, f := range files {
+		hashes[f] = "deleted"
+	}
+	if len(files) > 0 {
+		out, err := repo.Git(append([]string{"ls-tree", "-r", "-z", tip, "--"}, files...)...)
+		if err != nil {
+			return Fingerprint{}, err
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
+			meta, path, ok := strings.Cut(line, "\t")
+			if !ok {
+				continue
+			}
+			if f := strings.Fields(meta); len(f) == 3 && f[1] == "blob" {
+				if _, want := hashes[path]; want {
+					hashes[path] = f[2]
+				}
+			}
+		}
+	}
+	return Fingerprint{Digest: digest(hashes), Files: hashes}, nil
+}
+
+// Only is f restricted to the files keep accepts.
+func (f Fingerprint) Only(keep func(string) bool) Fingerprint {
+	files := map[string]string{}
+	for p, h := range f.Files {
+		if keep(p) {
+			files[p] = h
+		}
+	}
+	return Fingerprint{Digest: digest(files), Files: files}
+}
+
+func excludedPath(p string) bool {
+	for _, pre := range ExcludedPaths {
+		if p == pre || strings.HasPrefix(p, strings.TrimSuffix(pre, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func digest(files map[string]string) string {
 	keys := make([]string, 0, len(files))
 	for k := range files {
