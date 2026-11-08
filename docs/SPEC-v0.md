@@ -228,8 +228,17 @@ commit-config, pairing, remote access, revoking devices).
 - Signed approvals, locally: the approvers' anchors (the task's base ref, the configured
   base, the start commit, origin's default branch, local `main`/`master`) can all be
   rewritten by a determined agent with a local commit, an edited `task.yaml` or
-  `git update-ref`. CI, which reads approvers at the merge-base, is the barrier. A CI run on
+  `git update-ref`. CI, which reads approvers at the tip of the base, is the barrier. A CI run on
   a push without a PR takes its base from the branch itself.
+- A passkey is a human factor only while the server process is not in the agents' hands.
+  Where agents run as the same Unix user as the server, an agent can replace
+  `~/.truehand/bin/truehand`, or kill the server and serve its own page at the same address;
+  the phone then signs whatever that page asks (another plan or head than the one shown),
+  and no human checks a sha by eye. Defences: run the agents as a different Unix user, who
+  can neither write the server's binary and state nor signal its process (recommended on a
+  Linux server); CI stays the lock, since a signed approval names one exact `plan_sha256`
+  and the PR review should read that plan; on the Mac, Touch ID in the app is less exposed,
+  because the shell rebuilds the intent and shows its repo, branch and sha in the prompt.
 - Identity is per Claude Code process: subagents and in-process agent-team teammates share
   it, so they cannot review each other's work. Reviewers run as separate processes or are
   humans.
@@ -269,7 +278,45 @@ commit-config, pairing, remote access, revoking devices).
   records. Check the base branch's config after committing; CI reads approvers from there.
 - A PR for a task on a remote machine is opened from the Mac (`gh` on the Mac) only with an
   intent signed by this Mac's key, checked by the Mac itself as well as by the peer.
-- Windows is out of scope (PTY, peer credentials, Keychain); Linux is best effort.
+- Windows is out of scope (PTY, peer credentials, Keychain), as a server too: a Windows
+  device can approve with a passkey (Windows Hello, RS256), but Truehand does not run on it.
+  Linux runs headless (`truehand linux install`), approving only through passkeys.
+- On a headless server whose agents share the server's Unix user, passkey signatures are only
+  as trustworthy as the server process (see §7): prefer a separate user for the agents.
+- Revoking a passkey from the phone is soft: a remaining owner, or an agent with the server
+  user's files, can grant a new one. The durable revocation is `sudo truehand passkey revoke
+  <id>` on Linux (root writes `/etc/truehand/revoked.json`, 0644, next to the anchor), or on
+  the Mac from the app, behind Touch ID. While that list cannot be read the server trusts no
+  owner passkey at all (on the Mac, until the app has handed it the list). If it does not
+  parse, `sudo truehand passkey revoke --repair` rewrites it in one rename, revoking every
+  credential id it can still read and keeping the old file as `revoked.json.bak`: there is
+  no moment in which a revoked passkey counts again. A recovered entry keeps its key's hash only
+  when the readable part of the broken file had it in the same entry; otherwise it covers
+  only that credential id, not a new registration of the same key under another id: run
+  `sudo truehand passkey revoke <id>` again while the passkey is still in the server user's
+  list, to revoke its key too. There is one list per machine, for the server's user: a list
+  that names another uid makes the server trust no owner passkey, with an error.
+  If it is a file not owned by root, `--repair` or any revoke rewrites it as root's, 0644.
+  If it is a link, both refuse without reading it (its target could be anyone's file, and
+  adopting it could drop revocations): check the target and, if it is the real list,
+  `sudo cp --remove-destination <target> /etc/truehand/revoked.json`, then run it again.
+  By hand, as a fallback for a list that does not parse: `sudo mv /etc/truehand/revoked.json
+  /etc/truehand/revoked.json.bak`, then `sudo truehand passkey revoke <id>` for each id in
+  the `.bak` (revoke lists them).
+- `sudo truehand passkey revoke <id>` takes the key to revoke from the passkeys still in the
+  server user's file. An agent running as that user can put another owner's key under the id
+  being revoked, so that owner gets revoked instead: a denial of service, never a new owner.
+  The command shows the key's fingerprint and asks to confirm it: compare it with the
+  fingerprint shown for this passkey in Settings → Passkeys on a device you still have before
+  typing `yes` (and skip `--yes`).
+- Revoking a passkey at the server does not remove it from the repos' `approvers`: as long as
+  a base branch lists its key it signs for that project, including in CI. Remove it from each
+  project's rules too (the app reminds you).
+- A synced passkey (Google Password Manager, iCloud Keychain) can sign from any device of that
+  account; the app labels it "synced". Whoever controls the account controls the passkey.
+- `sudo truehand passkey bootstrap` trusts the terminal it runs on: it refuses passwordless
+  sudo, but a sudo credential still cached (`sudo -k` clears it) or an agent typing into that
+  terminal could release an owner.
 - File edits made through Bash (`sed -i`, redirects) are not recorded as "edited"; only the
   Write/Edit tools are. Hands and the move to building still mark their actors as workers.
 - Tasks are not moved back automatically when evidence goes stale (reads never write): the

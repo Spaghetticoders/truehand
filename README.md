@@ -118,7 +118,8 @@ running) and signs in to with a token kept in the Keychain.
 - **Phone.** Settings → pair a phone: a one-time code (or QR) valid for two minutes gives the
   phone its own revocable access. Turn on tailnet access in Settings to reach the Mac over
   Tailscale (the server otherwise listens on 127.0.0.1 only). From the phone, approvals,
-  pushes and PRs go into a queue you confirm at the Mac.
+  pushes and PRs go into a queue you confirm at the Mac, or are signed right there with a
+  passkey ([below](#approve-from-your-phone)).
 
 Without the Mac app, `make app && bin/truehand serve` serves the same UI on 127.0.0.1 and
 prints a token to sign in with; approvals, pushes and PRs then wait in the queue until you
@@ -143,6 +144,57 @@ there, which listens only on a unix socket; the Mac talks to it through
 follow them from the Mac or the phone. Approving, pushing and opening PRs on a remote project
 need signed approvals: add the Mac app's key to `approvers` in that repo's config on its base
 branch.
+
+### Approve from your phone
+
+A passkey makes any device an approver: the fingerprint or face on an Android phone or an
+iPhone, Touch ID or Windows Hello in a desktop browser, or a FIDO2 security key. Nothing is
+platform specific; ES256 and RS256 passkeys both work, and one person can register several.
+
+Passkeys need HTTPS, which `tailscale serve` provides: turn on access through tailscale serve
+in Settings and open Truehand from its `https://<machine>.<tailnet>.ts.net` address. Then
+Settings → Passkeys → **Add this device**, or **Code for another device** (a QR and a one-time
+code valid for a few minutes) to enrol a phone. A passkey plays two roles:
+
+- **Owner of the server**: it stands in for the Mac's Touch ID on this server (pairing
+  devices, settings, committing a config with no approvers yet). The first owner is
+  released by the Mac, or on a server without one by `sudo truehand passkey bootstrap`.
+- **Approver of a project**: "Make it an approver" adds its public key to the project's
+  `approvers`; you then sign the commit of the rules on the base and their push from the
+  same device. From then on plans, pushes and PRs of that project are signed with the
+  passkey, from wherever you are ([docs/config.md](docs/config.md#approvers)).
+
+### Run on a Linux server
+
+Truehand runs headless on a Linux machine of the tailnet, with no screen and no Mac:
+
+```sh
+truehand linux install        # systemd --user unit, loginctl enable-linger, tailscale serve
+truehand linux install --dry-run   # print the unit and the commands, change nothing
+sudo truehand passkey bootstrap    # at the server's own terminal: first owner passkey
+sudo -k                            # forget the cached sudo credentials
+sudo truehand passkey revoke <id>  # revoke an owner passkey for good (root's list)
+sudo truehand passkey revoke --repair  # rewrite that list if it is damaged, revoked ids kept
+```
+
+`linux install` runs as your user: it writes `~/.config/systemd/user/truehand.service`
+(`serve --headless` on 127.0.0.1, started through your login shell so PATH has nvm, npm and
+`~/.local/bin`), enables linger so it survives logout, and publishes it with
+`tailscale serve --https=443` (once: `sudo tailscale set --operator=$USER`).
+
+`passkey bootstrap` prints a one-time code (valid 10 minutes) and the enrolment address on
+the terminal, never in a log; open the address on the phone, type the code, create the
+passkey: it becomes the server's owner. Run it from a terminal where no agent runs (the
+console, or ssh with a tty). It refuses when your account can use sudo without a password,
+since your agents could then make an owner too; `sudo -k` afterwards drops the sudo
+credentials cached for a few minutes. On a headless server human actions need an owner's
+or an approver's passkey: there is no OS dialog to fall back on.
+
+A passkey is a human factor only while the server is out of the agents' reach. If the agents
+run as the same Unix user, one of them can replace the server's binary or put its own page at
+the same address, and your phone will sign what that page asks. Run the agents as another
+Unix user that cannot write `~/.truehand` nor kill the server, and keep CI with PR review as
+the lock ([docs/SPEC-v0.md](docs/SPEC-v0.md), §7).
 
 ### From a terminal: sessions / attach
 
