@@ -383,6 +383,10 @@ func (s *Server) confirmQueued(w http.ResponseWriter, r *http.Request) {
 		s.confirmCommitConfig(w, r, *p, q)
 		return
 	}
+	if q.Kind == "restack" {
+		s.confirmRestack(w, r, *p, q)
+		return
+	}
 	var body struct {
 		SignedIntent *sign.Signed `json:"signedIntent"`
 	}

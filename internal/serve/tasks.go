@@ -160,11 +160,37 @@ func (s *Server) task(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := l.WS.Detail(l.Task)
 	if err != nil {
-		fail(w, err)
-		return
+		// A stacked task whose chain broke cannot be measured; it is still shown, with why,
+		// so it can be restacked.
+		if _, berr := l.WS.BaseOf(l.Task); berr == nil {
+			fail(w, err)
+			return
+		}
+		d = brokenStackDetail(l.WS, l.Task)
 	}
 	pd, sum := s.summaryOne(l, d.NextGate)
 	writeJSON(w, s.detail(pd, sum, d, l.WS, l.WS.Config))
+}
+
+// brokenStackDetail is what can be read of a task without its base: no gates, no evidence.
+func brokenStackDetail(ws *core.Workspace, t *board.Task) *core.TaskDetail {
+	v := &core.TaskView{Task: t, Active: ws.ActiveTask() == t.ID, Comments: []board.Event{}, Evidence: []core.EvidenceView{}, Approvals: []board.Approval{}}
+	v.Description, _ = ws.Store.Description(t.ID)
+	events, _ := ws.Store.Events(t.ID)
+	for _, e := range events {
+		if e.Type == "comment" {
+			v.Comments = append(v.Comments, e)
+		}
+	}
+	if a, err := ws.Store.Approvals(t.ID); err == nil && a != nil {
+		v.Approvals = a
+	}
+	d := &core.TaskDetail{TaskView: v, Events: []board.Event{}}
+	d.Plan.Problems = []plan.Problem{}
+	if events != nil {
+		d.Events = events
+	}
+	return d
 }
 
 // checkSource refuses ticket references that would read local files outside the repo.

@@ -124,6 +124,13 @@ type taskSummary struct {
 	ReadOnly        bool        `json:"readOnly"`
 	UpdatedAt       time.Time   `json:"updatedAt"`
 	SessionIDs      []string    `json:"sessionIds"`
+	// StackedOn is the task this one builds on; StackError why that no longer holds (the
+	// task needs a restack). Tip is the commit the task is judged at because StackedBy build
+	// on it: its hands no longer run.
+	StackedOn  string   `json:"stackedOn,omitempty"`
+	StackError string   `json:"stackError,omitempty"`
+	Tip        string   `json:"tip,omitempty"`
+	StackedBy  []string `json:"stackedBy,omitempty"`
 }
 
 type historyView struct {
@@ -434,7 +441,40 @@ func (s *Server) summarize(pd *projectData, pt core.ProjectTask, in core.Waiting
 	if hasPR {
 		sum.PRURL = pr.URL
 	}
+	if pt.Task != nil && pd.Main != nil {
+		s.stackFacts(&sum, pd.Main, pt.Task, pd.PV)
+	}
 	return sum
+}
+
+// stackFacts fills a summary's stack fields; an error is shown, never fatal to the board.
+func (s *Server) stackFacts(sum *taskSummary, ws *core.Workspace, t *board.Task, pv *core.ProjectView) {
+	if t.StackedOn != "" {
+		sum.StackedOn = t.StackedOn
+		if _, err := ws.BaseOf(t); err != nil {
+			sum.StackError = err.Error()
+		}
+	}
+	var by []string
+	if pv != nil {
+		for _, x := range pv.Tasks {
+			if x.Task != nil && x.StackedOn == t.ID && x.ID != t.ID {
+				by = append(by, x.ID)
+			}
+		}
+	} else if all, err := ws.Store.List(); err == nil {
+		for _, x := range all {
+			if x.StackedOn == t.ID && x.ID != t.ID {
+				by = append(by, x.ID)
+			}
+		}
+	}
+	if len(by) > 0 {
+		sum.StackedBy = by
+		if tip, err := ws.TipOf(t); err == nil {
+			sum.Tip = tip
+		}
+	}
 }
 
 func (s *Server) summaries(pd *projectData) []taskSummary {
