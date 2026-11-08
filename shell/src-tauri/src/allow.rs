@@ -7,6 +7,7 @@ const HUMAN: &[(&str, &str)] = &[
     ("POST", "/api/projects/*/tasks/*/actions/approve-plan"),
     ("POST", "/api/projects/*/tasks/*/actions/push"),
     ("POST", "/api/projects/*/tasks/*/actions/open-pr"),
+    ("POST", "/api/projects/*/tasks/*/restack"),
     ("POST", "/api/queued/*/confirm"),
     ("POST", "/api/pair/code"),
     ("DELETE", "/api/devices/*"),
@@ -116,6 +117,21 @@ mod tests {
         assert!(!human_request("GET", "/api/projects/p_1/push-base"));
         assert!(!human_request("POST", "/api/projects/p_1/push-base/x"));
         assert!(!human_request("POST", "/api/projects/p_1/config-intent"));
+    }
+
+    #[test]
+    fn allows_restacking_a_task() {
+        assert!(human_request("POST", "/api/projects/p_1/tasks/T-1/restack"));
+        assert!(human_request("POST", "/api/projects/m_1~p_1/tasks/T-1/restack"));
+    }
+
+    #[test]
+    fn refuses_reading_or_extending_restack() {
+        assert!(!human_request("GET", "/api/projects/p_1/tasks/T-1/restack"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/T-1/restack/x"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/restack"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/../restack"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/T-1/restack?on=x"));
     }
 
     #[test]
