@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -37,4 +38,18 @@ func Sign(t testing.TB, k *ecdsa.PrivateKey, in sign.Intent) sign.Signed {
 		t.Fatal(err)
 	}
 	return sign.Signed{Intent: in, Format: sign.FormatES256, Sig: base64.StdEncoding.EncodeToString(sig)}
+}
+
+// RSAKey returns a new RSA key of this many bits and its public half as PEM.
+func RSAKey(t testing.TB, bits int) (*rsa.PrivateKey, string) {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k, string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 }

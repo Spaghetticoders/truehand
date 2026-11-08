@@ -34,21 +34,32 @@ func reviewIntent() sign.Intent {
 	}
 }
 
-func TestReviewOnlyP256Keys(t *testing.T) {
+// RSA joined P-256 for Windows Hello (decision D4): at least 2048 bits, exponent 65537.
+func TestReviewOnlyP256AndRSAKeys(t *testing.T) {
 	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	p224, _ := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
 	r, _ := rsa.GenerateKey(rand.Reader, 2048)
+	small, _ := rsa.GenerateKey(rand.Reader, 1024)
+	e3 := r.PublicKey
+	e3.E = 3
 	ed, _, _ := ed25519.GenerateKey(rand.Reader)
 	_, good := signtest.Key(t)
+	if _, err := sign.ParsePublicKey(pemOf(t, &r.PublicKey)); err != nil {
+		t.Errorf("RSA-2048 rejected: %v", err)
+	}
+	if _, err := sign.ParseP256PublicKey(pemOf(t, &r.PublicKey)); err == nil {
+		t.Error("ParseP256PublicKey accepted RSA")
+	}
 	for name, s := range map[string]string{
-		"P-384":   pemOf(t, &p384.PublicKey),
-		"P-224":   pemOf(t, &p224.PublicKey),
-		"RSA":     pemOf(t, &r.PublicKey),
-		"Ed25519": pemOf(t, ed),
-		"two":     good + good,
-		"private": strings.Replace(good, "PUBLIC KEY", "EC PRIVATE KEY", 2),
-		"junk":    "not a key",
-		"trailer": good + "garbage",
+		"P-384":    pemOf(t, &p384.PublicKey),
+		"P-224":    pemOf(t, &p224.PublicKey),
+		"RSA-1024": pemOf(t, &small.PublicKey),
+		"RSA e=3":  pemOf(t, &e3),
+		"Ed25519":  pemOf(t, ed),
+		"two":      good + good,
+		"private":  strings.Replace(good, "PUBLIC KEY", "EC PRIVATE KEY", 2),
+		"junk":     "not a key",
+		"trailer":  good + "garbage",
 	} {
 		if _, err := sign.ParsePublicKey(s); err == nil {
 			t.Errorf("%s key accepted", name)

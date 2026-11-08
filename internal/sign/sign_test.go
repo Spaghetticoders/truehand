@@ -23,7 +23,7 @@ var plan = strings.Repeat("ab", 32)
 func intent() sign.Intent {
 	return sign.Intent{
 		Action: sign.ActionApprovePlan, Repo: "github.com/spaghetticoders/truehand", Task: "T-12",
-		PlanSHA256: plan, Nonce: strings.Repeat("0f", 16), Time: "2026-10-27T22:10:00Z", Approver: "emanuel-mac",
+		PlanSHA256: plan, Nonce: strings.Repeat("0f", 16), Time: "2026-10-27T22:10:00Z", Approver: "alice-mac",
 	}
 }
 
@@ -36,7 +36,7 @@ func TestMessageBytes(t *testing.T) {
 		"head: \n" +
 		"nonce: " + strings.Repeat("0f", 16) + "\n" +
 		"time: 2026-10-27T22:10:00Z\n" +
-		"approver: emanuel-mac\n"
+		"approver: alice-mac\n"
 	if got := string(intent().Message()); got != want {
 		t.Fatalf("message\n%q\nwant\n%q", got, want)
 	}

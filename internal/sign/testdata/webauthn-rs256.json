@@ -1,0 +1,43 @@
+{
+  "name": "rs256",
+  "browser": "151.0.7922.34",
+  "rpID": "localhost",
+  "origin": "http://localhost:63847",
+  "challenge": "AOD8-NOYOFOLD0W2QMnowr9i8upXWrENshgEANum7cs",
+  "registration": {
+    "id": "ABE-Uu61UNrHNRSbMrU4TxPbD2qc8Hau09k-Fy4Euk0",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiQU9EOC1OT1lPRk9MRDBXMlFNbm93cjlpOHVwWFdyRU5zaGdFQU51bTdjcyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVkBZ0mWDeWIDoxodDQXD2R2YFuP5K65ooYyx5lc87qDHZdjRQAAAAEBAgMEBQYHCAECAwQFBgcIACAAET5S7rVQ2sc1FJsytThPE9sPapzwdq7T2T4XLgS6TaQBAwM5AQAgWQEAvMQ8di7_8mk9kg6LGHPWlIEknhz1Ew7GlA7csCOIy4t0FQd_Cv3ZtZwK7N-jKRzSO1qN6a9uH1B_P8h4waNEZKhFaGqydU-CyVicMvA9JupYEFUFL8kEY50TlTKZ1QwC-oXH0g2sEaCG6htOhOh-ik14Q74FMQ9leCMkx0BMUrOWFPd0zZWkbGCmw8PFNEf09snSOENa-7oXE2V3VneaHK4sPzwJ_jI9NfGTSKiAXB3zu-YXW9QFk3n2xOs--oJnZxD2xikLqPcL1dv3kcOV8xLEzxr1Vv-p9zbfQQFbg_GLkLkBXUiEW_-WnfkwAyo5IHJRtLAi6jNGEyNgf7oDMyFDAQAB",
+    "alg": -257
+  },
+  "intent": {
+    "action": "approve-plan",
+    "repo": "github.com/spaghetticoders/demo",
+    "task": "T-1",
+    "plan_sha256": "64879f7d6b960a01909762d911a32d4582c20010c5641ee90278b644a9e3b525",
+    "head": "",
+    "nonce": "4061c1fb44b6fd131635cedf95da4207",
+    "time": "2026-11-07T23:08:47Z",
+    "approver": "phone"
+  },
+  "serverIntent": {
+    "action": "pair-code",
+    "server": "localhost",
+    "subject": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "nonce": "5e63a29ff2dc254e4ec032fac91e931a",
+    "time": "2026-11-07T23:08:47Z",
+    "credential": "ABE-Uu61UNrHNRSbMrU4TxPbD2qc8Hau09k-Fy4Euk0"
+  },
+  "assertions": {
+    "intent": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUlBETzhNNDZFT2M1Z1V2aHoyeHhhb3hrNDdkZTk4cElJdjZEcjduMGE3dyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "signature": "no4xx8Auydj4b7j365lPbL3WmEOoUOWMQGmMn3Mb92NTSezXJL5Ep_dmGLmPms-RE7qzlO5-Ui0xwzJ2qKBdy-ntKdu3wS8XawT7m5-MJALPJV86MgNZdR07ZpQS_QFxroLL5gNONAcp383Fk18YRro9Luo5fribO-TjOpWEdpxc69KlcFPsEKz6kVx8QQPTpwUTPWKT4od9HcmQzpAmnHi0OlmCEauSBo4mEJ_cBleAAcAQD_23lUA02mDHJr3hDOGCtMRPwUyUQr48XsCuILYC35jZGmNa5ISjnFbCNlChBRWJpgHjxrngXLKI-nP_Mc1nBQhcZRKOGH9lwAWq-A"
+    },
+    "server": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiMG13eERDTXViTTdUT1hMSlc3aXowR1ZrSUNxTzYyRE5aX0dBZzFmbG9vYyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "signature": "caUnfj2V5Ix1ZbE5p-JSwbDsh7xXzeBou6zoof_WtOHYVgpIcwUAX4rr4myzKR7CVa0CaGAwr1R2DM0etbam2FQ1peim3UIjNDmWVFjna7lGaPsWEkfEntSFHME9v2419v16e4Ca_OFiTkRG99OFA--1JP7pYkb05mX_GR6_d21KEgSxeb3mYFf7qCKLAIXUiY5tGBVWHRXgXl5rrprvFmOsaCT7CceV5_fYryDhZ3_XV-sXp4WXQLljRdScQJtIRpqmloZOHo03CCWjxNAvssv8RLQSBnA4hC42SbHL67X_cTTRo5GcNtaXF2DlsVsIpMQJ6MeMZnFnhnBlnjymPg"
+    }
+  }
+}

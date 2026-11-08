@@ -1,0 +1,43 @@
+{
+  "name": "es256",
+  "browser": "151.0.7922.34",
+  "rpID": "localhost",
+  "origin": "http://localhost:63847",
+  "challenge": "9VVQ3s8c0JitZtpRHKMDLkTfdq_Tg90tOzbGJOqnPxg",
+  "registration": {
+    "id": "8GVE9IpdFYON_6o_3oRaPeqY65ZY0ra1486UejzwZpo",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiOVZWUTNzOGMwSml0WnRwUkhLTURMa1RmZHFfVGc5MHRPemJHSk9xblB4ZyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAIPBlRPSKXRWDjf-qP96EWj3qmOuWWNK2tePOlHo88GaapQECAyYgASFYIMvHi8JSSVRC1ge5Cwo31SromNglSBYYkFTCKzMqcRaeIlggHkUGC26DHnwohXM5vWPF7doY_bBWlJOlpOAhOU-mdSk",
+    "alg": -7
+  },
+  "intent": {
+    "action": "approve-plan",
+    "repo": "github.com/spaghetticoders/demo",
+    "task": "T-1",
+    "plan_sha256": "64879f7d6b960a01909762d911a32d4582c20010c5641ee90278b644a9e3b525",
+    "head": "",
+    "nonce": "23f6c3a6330383db46e882343d736f90",
+    "time": "2026-11-07T23:08:47Z",
+    "approver": "phone"
+  },
+  "serverIntent": {
+    "action": "pair-code",
+    "server": "localhost",
+    "subject": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "nonce": "17cdd65117d532ac71e946d4ff2722b2",
+    "time": "2026-11-07T23:08:47Z",
+    "credential": "8GVE9IpdFYON_6o_3oRaPeqY65ZY0ra1486UejzwZpo"
+  },
+  "assertions": {
+    "intent": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiM3hYdUNIS0hZdWtaWlp2bFlFMEQ5RnZvRHl1TF9WSzNVNWVpZVlhOEx2dyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "signature": "MEUCIQDs1-pahYSLi8Ulgtul3KqPPMZyXKz96HEo8QY0rk9sngIgNdQmn5zg-iXppJ87kdgLhEX8EisD0L7kMz1fl20wC8o"
+    },
+    "server": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiLWk2cVVBZTVpVjM5Mzhxd1FUeHV4T0xxTDJMUVpwdXlpUC12cVVEcjBJWSIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NjM4NDciLCJjcm9zc09yaWdpbiI6ZmFsc2UsIm90aGVyX2tleXNfY2FuX2JlX2FkZGVkX2hlcmUiOiJkbyBub3QgY29tcGFyZSBjbGllbnREYXRhSlNPTiBhZ2FpbnN0IGEgdGVtcGxhdGUuIFNlZSBodHRwczovL2dvby5nbC95YWJQZXgifQ",
+      "signature": "MEYCIQDbpzrBC4b9wssXVWpW7FlKN7h3f9Y9QXvk6zHXQVVjQAIhAJg-XTrRBbTj9xiHkxM_JAuhTwAAZSyAgffmKdy-Vb6g"
+    }
+  }
+}
