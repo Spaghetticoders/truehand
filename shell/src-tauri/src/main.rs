@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod allow;
+mod anchor;
 mod approver;
+mod revoke;
 mod server;
 mod text;
 
@@ -43,7 +45,8 @@ fn origin(url: &Url) -> String {
 #[tauri::command]
 async fn start(app: AppHandle, window: WebviewWindow, shell: State<'_, Shell>) -> Result<String, String> {
     let t = shell.text;
-    let c = tauri::async_runtime::spawn_blocking(move || server::ensure(t)).await.map_err(|e| e.to_string())??;
+    let app0 = app.clone();
+    let c = tauri::async_runtime::spawn_blocking(move || server::ensure(t, mac_pem(&app0))).await.map_err(|e| e.to_string())??;
     let (c2, app2) = (c.clone(), app.clone());
     let login = tauri::async_runtime::spawn_blocking(move || {
         register_key(&app2, &c2);
@@ -72,7 +75,9 @@ async fn start(app: AppHandle, window: WebviewWindow, shell: State<'_, Shell>) -
             .permission("allow-pick-folder")
             .permission("allow-sign-intent")
             .permission("allow-approver-public-key")
-            .permission("allow-approver-key-fingerprint"),
+            .permission("allow-approver-key-fingerprint")
+            .permission("allow-anchor-passkey")
+            .permission("allow-revoke-owner"),
     )
     .map_err(|e| e.to_string())?;
     *shell.creds.lock().unwrap() = Some(c);
@@ -156,15 +161,29 @@ fn approver_key_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 
 /// Gives the server this Mac's approver public key, which it keeps in memory to check
 /// intents forwarded to remote machines. Only an existing key; failures only cost remote PRs.
-fn register_key(app: &AppHandle, c: &Creds) {
-    let pem = approver_key_path(app)
+fn mac_pem(app: &AppHandle) -> Option<String> {
+    approver_key_path(app)
         .ok()
         .and_then(|p| approver::SecureEnclaveKey::load(&p))
         .and_then(|k| k.public_x963().ok())
-        .and_then(|x| approver::public_pem(&x).ok());
-    if let Some(pem) = pem {
+        .and_then(|x| approver::public_pem(&x).ok())
+}
+
+fn register_key(app: &AppHandle, c: &Creds) {
+    if let Some(pem) = mac_pem(app) {
         let _ = server::request(c, "POST", "/api/shell/key", Some(&serde_json::json!({ "publicKey": pem })), true, Duration::from_secs(10));
     }
+}
+
+/// Gives the server the passkeys this Mac revoked for good after a revocation: the whole
+/// list, it replaces the server's. A new server gets it on stdin (server::app_line).
+fn send_revoked(c: &Creds) -> Result<(), String> {
+    let list = server::load_revoked()?;
+    let r = server::request(c, "POST", "/api/shell/revoked", Some(&serde_json::json!({ "revoked": list })), true, Duration::from_secs(10))?;
+    if r.status != 204 && r.status != 200 {
+        return Err(format!("revoked passkeys: HTTP {} {}", r.status, r.body));
+    }
+    Ok(())
 }
 
 fn approver_key(app: &AppHandle) -> Result<approver::SecureEnclaveKey, String> {
@@ -235,6 +254,103 @@ async fn sign_intent(app: AppHandle, shell: State<'_, Shell>, project_id: String
         .await
         .map_err(|e| e.to_string())??;
     Ok(approver::Signed { intent, format: "es256", sig: approver::base64_std(&der) })
+}
+
+fn get_json(c: &Creds, path: &str, shell: bool) -> Result<serde_json::Value, String> {
+    let r = server::request(c, "GET", path, None, shell, Duration::from_secs(30))?;
+    if r.status != 200 {
+        return Err(format!("{path}: HTTP {} {}", r.status, r.body));
+    }
+    serde_json::from_str(&r.body).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Makes a passkey waiting for this Mac an owner of the server: signs, with the Secure
+/// Enclave key behind Touch ID, the anchor-owner intent the verified server prepared for it,
+/// once it matches that passkey, the host the server serves passkeys on and the clock. The
+/// page only says which passkey. One signature at a time, shared with sign_intent.
+#[tauri::command]
+async fn anchor_passkey(app: AppHandle, shell: State<'_, Shell>, id: String) -> Result<(), String> {
+    let t = shell.text;
+    if shell.signing.swap(true, Ordering::SeqCst) {
+        return Err(t.signing_busy.into());
+    }
+    let _guard = SignGuard(&shell.signing);
+    if !allow::segment_ok(&id) || !anchor::credential_ok(&id) {
+        return Err("anchor_passkey: invalid request".into());
+    }
+    let c = creds(&shell)?;
+    let (c2, id2) = (c.clone(), id.clone());
+    let (ready, reason) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
+        let prepared = get_json(&c2, &format!("/api/passkeys/{id2}/anchor-intent"), true)?;
+        let passkeys = get_json(&c2, "/api/passkeys", false)?;
+        let settings = get_json(&c2, "/api/settings", false)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs() as i64;
+        let ready = anchor::check_replies(&id2, prepared, &passkeys, &settings, now)?;
+        let clean = |s: &str| s.chars().filter(|c| !c.is_control()).take(40).collect::<String>();
+        let reason = t
+            .sign_anchor_owner
+            .replace("{label}", &clean(&ready.checked.label))
+            .replace("{device}", &ready.device.as_deref().map(clean).unwrap_or_else(|| t.unknown_device.into()))
+            .replace("{key}", &anchor::grouped(&ready.checked.key))
+            .replace("{server}", &ready.intent.server);
+        Ok((ready, reason))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let app2 = app.clone();
+    let msg = ready.checked.message;
+    let der = tauri::async_runtime::spawn_blocking(move || approver_key(&app2)?.sign(&msg, &reason))
+        .await
+        .map_err(|e| e.to_string())??;
+    let signed = anchor::Signed { intent: ready.intent, format: "es256", sig: approver::base64_std(&der) };
+    let body = serde_json::json!({ "signed": signed });
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        // The key may have been created just now, and the server checks the grant with it.
+        register_key(&app, &c);
+        server::request(&c, "POST", &format!("/api/passkeys/{id}/anchor"), Some(&body), true, Duration::from_secs(30))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if r.status != 204 && r.status != 200 {
+        return Err(format!("anchor: HTTP {} {}", r.status, r.body));
+    }
+    Ok(())
+}
+
+/// Revokes passkey `passkey_id` for good on this Mac, after Touch ID: adds it to the list in the
+/// Keychain, gives the server the list, then removes the passkey from the server's file if it
+/// is still there. Works on a listed passkey or on a soft revocation. One signature at a time.
+#[tauri::command]
+async fn revoke_owner(app: AppHandle, shell: State<'_, Shell>, passkey_id: String) -> Result<(), String> {
+    let id = passkey_id;
+    let t = shell.text;
+    if shell.signing.swap(true, Ordering::SeqCst) {
+        return Err(t.signing_busy.into());
+    }
+    let _guard = SignGuard(&shell.signing);
+    if !allow::segment_ok(&id) || !anchor::credential_ok(&id) {
+        return Err("revoke_owner: invalid request".into());
+    }
+    let c = creds(&shell)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let passkeys = get_json(&c, "/api/passkeys", false)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs() as i64;
+        let target = revoke::target(&id, &passkeys, &revoke::rfc3339(now))?;
+        let clean = |s: &str| s.chars().filter(|c| !c.is_control()).take(40).collect::<String>();
+        let reason = t.sign_revoke_owner.replace("{label}", &clean(&target.revocation.label)).replace("{key}", &anchor::grouped(&target.key));
+        approver_key(&app)?.sign(&revoke::message(&target.revocation), &reason)?;
+        server::save_revoked(&revoke::add(server::load_revoked()?, target.revocation))?;
+        send_revoked(&c)?;
+        if target.delete {
+            let r = server::request(&c, "DELETE", &format!("/api/passkeys/{id}"), None, true, Duration::from_secs(15 * 60))?;
+            if r.status >= 300 && r.status != 404 {
+                return Err(format!("revoked on this Mac; removing it from the server: HTTP {} {}", r.status, r.body));
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
@@ -377,7 +493,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![AUTOSTART_ARG])))
         .manage(Shell { creds: Mutex::new(None), text: t, quitting: AtomicBool::new(false), signing: AtomicBool::new(false) })
-        .invoke_handler(tauri::generate_handler![start, shell_request, pick_folder, sign_intent, approver_public_key, approver_key_fingerprint])
+        .invoke_handler(tauri::generate_handler![start, shell_request, pick_folder, sign_intent, approver_public_key, approver_key_fingerprint, anchor_passkey, revoke_owner])
         .setup(move |app| {
             let handle = app.handle().clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

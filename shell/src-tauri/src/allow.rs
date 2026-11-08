@@ -16,6 +16,9 @@ const HUMAN: &[(&str, &str)] = &[
     ("POST", "/api/projects/*/commit-config"),
     ("POST", "/api/machines"),
     ("POST", "/api/machines/*/update"),
+    ("POST", "/api/passkeys/enroll-code"),
+    ("DELETE", "/api/passkeys/*"),
+    ("POST", "/api/projects/*/push-base"),
     ("POST", ROTATE),
 ];
 
@@ -86,6 +89,33 @@ mod tests {
         assert!(!human_request("POST", "/api/shutdown"));
         assert!(!human_request("POST", "api/me"));
         assert!(human_request("POST", "/api/projects/p_1/commit-config"));
+    }
+
+    #[test]
+    fn allows_the_passkey_and_config_requests() {
+        assert!(human_request("POST", "/api/passkeys/enroll-code"));
+        assert!(human_request("DELETE", "/api/passkeys/cred_AB-12"));
+        // Only the shell itself asks for and sends an anchor signature, never the page.
+        assert!(!human_request("GET", "/api/passkeys/cred_AB-12/anchor-intent"));
+        assert!(!human_request("POST", "/api/passkeys/cred_AB-12/anchor"));
+        assert!(human_request("POST", "/api/projects/p_1/push-base"));
+        assert!(human_request("POST", "/api/projects/p_1/commit-config"));
+        assert!(!human_request("GET", "/api/passkeys/enroll-code"));
+        assert!(!human_request("DELETE", "/api/passkeys"));
+        assert!(!human_request("DELETE", "/api/passkeys/cred_1/anchor"));
+        assert!(!human_request("POST", "/api/passkeys/cred_1/anchor-intent"));
+        assert!(!human_request("GET", "/api/passkeys/cred_1/anchor"));
+        assert!(!human_request("POST", "/api/passkeys/cred_1/grant"));
+        assert!(!human_request("POST", "/api/passkeys/register"));
+        assert!(!human_request("POST", "/api/passkeys/register/options"));
+        assert!(!human_request("GET", "/api/passkeys"));
+        assert!(!human_request("POST", "/api/owner/challenge"));
+        assert!(!human_request("POST", "/api/passkeys/../anchor"));
+        assert!(!human_request("POST", "/api/passkeys/c%2F1/anchor"));
+        assert!(!human_request("GET", "/api/passkeys/cred_1/anchor-intent?x=1"));
+        assert!(!human_request("GET", "/api/projects/p_1/push-base"));
+        assert!(!human_request("POST", "/api/projects/p_1/push-base/x"));
+        assert!(!human_request("POST", "/api/projects/p_1/config-intent"));
     }
 
     #[test]

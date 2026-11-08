@@ -37,6 +37,8 @@ fn main() {
             "sign_intent",
             "approver_public_key",
             "approver_key_fingerprint",
+            "anchor_passkey",
+            "revoke_owner",
         ])),
     )
     .expect("tauri build");

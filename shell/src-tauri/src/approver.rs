@@ -216,7 +216,7 @@ mod tests {
             head: String::new(),
             nonce: "0123456789abcdef0123456789abcdef".into(),
             time: "2026-10-27T22:10:00Z".into(),
-            approver: "emanuel-mac".into(),
+            approver: "alice-mac".into(),
         }
     }
 
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(
             m,
             format!(
-                "truehand-intent/1\naction: approve-plan\nrepo: github.com/spaghetticoders/truehand\ntask: T-12\nplan_sha256: {}\nhead: \nnonce: 0123456789abcdef0123456789abcdef\ntime: 2026-10-27T22:10:00Z\napprover: emanuel-mac\n",
+                "truehand-intent/1\naction: approve-plan\nrepo: github.com/spaghetticoders/truehand\ntask: T-12\nplan_sha256: {}\nhead: \nnonce: 0123456789abcdef0123456789abcdef\ntime: 2026-10-27T22:10:00Z\napprover: alice-mac\n",
                 "a".repeat(64)
             )
         );
@@ -253,7 +253,7 @@ mod tests {
             |i| i.nonce = "g".repeat(32),
             |i| i.time = "2026-10-27T22:10:00.5Z".into(),
             |i| i.time = "2026-10-27 22:10:00Z".into(),
-            |i| i.approver = "-emanuel".into(),
+            |i| i.approver = "-alice".into(),
             |i| i.approver = "a b".into(),
             |i| i.task = ".T-1".into(),
         ];

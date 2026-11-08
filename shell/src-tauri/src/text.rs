@@ -18,6 +18,9 @@ pub struct Text {
     pub sign_open_pr: &'static str,
     pub unrecognized: &'static str,
     pub signing_busy: &'static str,
+    pub sign_anchor_owner: &'static str,
+    pub unknown_device: &'static str,
+    pub sign_revoke_owner: &'static str,
 }
 
 const IT: Text = Text {
@@ -40,6 +43,9 @@ const IT: Text = Text {
     sign_open_pr: "aprire la PR del ramo {branch} per {task} «{title}» in {repo} (commit {sha})",
     unrecognized: "Server non riconosciuto: all'indirizzo di Truehand risponde un processo che non conosce i segreti di questa app. Non gli è stato mandato nulla. Chiudi quel processo e riapri Truehand.",
     signing_busy: "C'è già una firma in corso",
+    sign_anchor_owner: "rendere owner di questo server la passkey «{label}» ({device}) registrata su {server}. Impronta {key}: deve coincidere con quella mostrata sul telefono",
+    unknown_device: "dispositivo sconosciuto",
+    sign_revoke_owner: "revocare per sempre, su questo Mac, la passkey «{label}» (impronta {key})",
 };
 
 const EN: Text = Text {
@@ -62,6 +68,9 @@ const EN: Text = Text {
     sign_open_pr: "open the PR of branch {branch} for {task} “{title}” in {repo} (commit {sha})",
     unrecognized: "Unrecognized server: whatever answers at Truehand's address does not know this app's secrets. Nothing was sent to it. Close that process and reopen Truehand.",
     signing_busy: "A signature is already in progress",
+    sign_anchor_owner: "make passkey “{label}” ({device}) registered on {server} an owner of this server. Fingerprint {key}: it must match the one shown on the phone",
+    unknown_device: "unknown device",
+    sign_revoke_owner: "revoke passkey “{label}” (fingerprint {key}) for good on this Mac",
 };
 
 pub fn current() -> &'static Text {

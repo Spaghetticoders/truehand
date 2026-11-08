@@ -56,6 +56,28 @@ fn save_creds(p: &Profile, c: &Creds) -> Result<(), String> {
     security_framework::passwords::set_generic_password(SERVICE, &p.account, &raw).map_err(|e| e.to_string())
 }
 
+const ITEM_NOT_FOUND: i32 = -25300;
+
+fn revoked_account(p: &Profile) -> String {
+    format!("{}:revoked", p.account)
+}
+
+/// The passkeys this Mac revoked for good. Unlike the credentials it is never deleted with the
+/// server. A missing item is an empty list; one that cannot be read is an error, so a denied
+/// Keychain prompt never silently drops revocations.
+pub fn load_revoked() -> Result<Vec<crate::revoke::Revocation>, String> {
+    match security_framework::passwords::get_generic_password(SERVICE, &revoked_account(&profile())) {
+        Ok(raw) => serde_json::from_slice(&raw).map_err(|e| format!("revoked passkeys in the Keychain: {e}")),
+        Err(e) if e.code() == ITEM_NOT_FOUND => Ok(Vec::new()),
+        Err(e) => Err(format!("revoked passkeys in the Keychain: {e}")),
+    }
+}
+
+pub fn save_revoked(list: &[crate::revoke::Revocation]) -> Result<(), String> {
+    let raw = serde_json::to_vec(list).map_err(|e| e.to_string())?;
+    security_framework::passwords::set_generic_password(SERVICE, &revoked_account(&profile()), &raw).map_err(|e| e.to_string())
+}
+
 pub fn forget_creds() {
     let _ = security_framework::passwords::delete_generic_password(SERVICE, &profile().account);
 }
@@ -174,8 +196,9 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&serde_json::Va
 }
 
 /// Reuses the server whose credentials are in the Keychain if it proves it is that server
-/// and still takes the token; starts a new one if nothing answers there.
-pub fn ensure(t: &Text) -> Result<Creds, String> {
+/// and still takes the token; starts a new one if nothing answers there, giving it this Mac's
+/// approver key (if any) and the passkeys this Mac revoked.
+pub fn ensure(t: &Text, mac_key: Option<String>) -> Result<Creds, String> {
     let p = profile();
     if let Some(c) = load_creds(&p) {
         match identify(&c) {
@@ -188,7 +211,7 @@ pub fn ensure(t: &Text) -> Result<Creds, String> {
             Identity::Nobody => {}
         }
     }
-    let c = spawn(&p, t)?;
+    let c = spawn(&p, t, mac_key)?;
     if !matches!(identify(&c), Identity::Ours) {
         return Err(t.unrecognized.into());
     }
@@ -253,7 +276,18 @@ struct Ready {
     pid: i32,
 }
 
-fn spawn(p: &Profile, t: &Text) -> Result<Creds, String> {
+/// The one JSON line `truehand serve --app` reads on stdin. `revoked` is always there: until
+/// the server has it, no passkey is its owner.
+pub fn app_line(token: &str, shell_secret: &str, mac_key: Option<&str>, revoked: &[crate::revoke::Revocation]) -> String {
+    let mut v = serde_json::json!({ "token": token, "shell_secret": shell_secret, "revoked": revoked });
+    if let Some(k) = mac_key {
+        v["mac_key"] = k.into();
+    }
+    v.to_string() + "\n"
+}
+
+fn spawn(p: &Profile, t: &Text, mac_key: Option<String>) -> Result<Creds, String> {
+    let revoked = load_revoked()?;
     let home = match &p.home {
         Some(h) => h.clone(),
         None => PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?),
@@ -283,7 +317,7 @@ fn spawn(p: &Profile, t: &Text) -> Result<Creds, String> {
 
     let token = secret();
     let shell_secret = secret();
-    let line = serde_json::json!({ "token": token, "shell_secret": shell_secret }).to_string() + "\n";
+    let line = app_line(&token, &shell_secret, mac_key.as_deref(), &revoked);
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(line.as_bytes());
     }
@@ -459,5 +493,33 @@ mod tests {
         assert!(constant_eq(b"abc", b"abc"));
         assert!(!constant_eq(b"abc", b"abd"));
         assert!(!constant_eq(b"abc", b"ab"));
+    }
+
+    #[test]
+    fn app_line_always_carries_the_revoked_list() {
+        use crate::revoke::Revocation;
+        let r = Revocation { credential: "cred_1".into(), public_key_sha256: "a".repeat(64), key: "0123456789ab".into(), label: "S25".into(), time: "2026-11-08T01:00:00Z".into() };
+        let line = app_line("tok", "sec", Some("-----BEGIN PUBLIC KEY-----\nX\n-----END PUBLIC KEY-----\n"), &[r]);
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((v["token"].as_str(), v["shell_secret"].as_str()), (Some("tok"), Some("sec")));
+        assert!(v["mac_key"].as_str().unwrap().starts_with("-----BEGIN PUBLIC KEY-----\n"));
+        assert_eq!(v["revoked"][0]["credential"], "cred_1");
+        assert_eq!(v["revoked"][0]["public_key_sha256"], "a".repeat(64));
+        let empty: serde_json::Value = serde_json::from_str(&app_line("tok", "sec", None, &[])).unwrap();
+        assert_eq!(empty["revoked"], serde_json::json!([]));
+        assert!(empty.get("mac_key").is_none());
+    }
+
+    /// Go cross-check: TRUEHAND_APP_LINE=<file> gets the line the shell writes on the stdin of
+    /// `truehand serve --app`, for internal/cli readAppCredentials.
+    #[test]
+    fn writes_the_app_line_for_the_go_reader() {
+        let Ok(path) = std::env::var("TRUEHAND_APP_LINE") else { return };
+        let r = crate::revoke::Revocation { credential: "cred_1".into(), public_key_sha256: "a".repeat(64), key: "0123456789ab".into(), label: "S25 «x»".into(), time: "2026-11-08T01:00:00Z".into() };
+        let pem = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6Kb2b0Z7WkzjHgOAYH0KGkV1mKcE\nh3sDHBl8XyY6ZPsW8KZnN+Q3P7aeYpS1+0K3cXoC2J9b8RZzP6vjv6aB7w==\n-----END PUBLIC KEY-----\n";
+        let empty = std::env::var("TRUEHAND_APP_LINE_EMPTY").is_ok();
+        let line = app_line(&secret(), &secret(), if empty { None } else { Some(pem) }, if empty { &[] } else { std::slice::from_ref(&r) });
+        std::fs::write(path, line).unwrap();
     }
 }
