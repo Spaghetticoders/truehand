@@ -310,6 +310,9 @@ func VerifySigned(repoID string, approvers []config.Approver, action, taskID, pl
 	var ap *config.Approver
 	for i := range approvers {
 		if approvers[i].ID == in.Approver {
+			if ap != nil {
+				return nil, fmt.Errorf("approver id %q is listed twice", in.Approver)
+			}
 			ap = &approvers[i]
 		}
 	}
@@ -345,60 +348,105 @@ func RepoID(repo *gitx.Repo) string {
 }
 
 // BaseApprovers returns the approvers whose keys count for a task; none means unsigned
-// approvals still count.
+// approvals still count. Approvers come only from committed configs, never from the working
+// tree: a key the working tree adds could be an agent's own.
 //
-// In CI ref is the merge-base, and its list is the only one: what a branch says is ignored.
-// Locally the task's files are the branch's to edit, so signed approvals are required as soon
-// as any source lists approvers: the task's base ref, the configured base, the commit the task
-// started from, origin's default branch, local main or master, or the loaded config. Keys come
-// from all but the last together; the loaded config's keys count only while no other source
-// lists any (approvers being introduced on a branch). A source that does not resolve is
-// skipped; it is an error only when none of them resolves.
+// In CI ref is the tip of the base branch the change goes into, and its list is the only one:
+// what a branch says is ignored, and a revocation on the base holds at once, also for branches
+// made before it. Locally the sources are the task's base ref, the configured base, the commit
+// the task started from, origin's default branch, local main or master; of those that list
+// approvers only the tips count (a source another descends from is an older state of the same
+// history), so a rotated key or a removed approver does not come back through an older ref.
+// Tips on diverged histories count together, an id taking its key from the first in the order
+// above. A source that lists no approvers never hides the others (so removing every approver
+// in a commit leaves the older lists in force locally: the strict direction). Once any source
+// lists approvers, a shallow clone or info/grafts is an error; without approvers nothing
+// changes.
+// A source that does not resolve is skipped; it is an error only when none of them
+// resolves. Local refs are the clone's to move, so only CI's check is a real lock.
 func BaseApprovers(repo *gitx.Repo, cfg *config.Config, t *board.Task, ref string) ([]config.Approver, error) {
 	if ref != "" {
 		list, err := approversAt(repo, ref)
-		if err != nil {
-			return nil, err
-		}
-		if len(list) == 0 {
-			return cfg.Approvers, nil
-		}
-		return list, nil
-	}
-	var keys []config.Approver
-	seen := map[string]bool{}
-	add := func(list []config.Approver) {
-		for _, a := range list {
-			if k := a.ID + "\x00" + a.PublicKey; !seen[k] {
-				seen[k] = true
-				keys = append(keys, a)
+		if err == nil && len(list) > 0 {
+			if why := repo.HistoryRewritten(); why != "" {
+				return nil, fmt.Errorf("approvers are listed, so signatures count, but the history is not the real one: %s", why)
 			}
 		}
+		return list, err
 	}
 	anchors := []string{t.BaseRef, cfg.Base, t.Base, "refs/remotes/origin/HEAD", "origin/main", "origin/master", "refs/heads/main", "refs/heads/master"}
 	commits, err := resolveCommits(repo, anchors)
 	if err != nil {
 		return nil, err
 	}
+	type source struct {
+		commit string
+		list   []config.Approver
+	}
+	var sources []source
 	resolved := false
 	for _, c := range commits {
 		if c == "" {
 			continue
 		}
+		resolved = true
 		list, err := approversAtCommit(repo, c)
 		if err != nil {
 			return nil, err
 		}
-		resolved = true
-		add(list)
+		if len(list) > 0 {
+			sources = append(sources, source{c, list})
+		}
 	}
 	if !resolved {
 		return nil, fmt.Errorf("none of the task's base refs (%s, %s) nor main, master or origin's resolves: cannot tell whether approvers are listed", orDash(t.BaseRef), orDash(cfg.Base))
 	}
-	if len(keys) == 0 {
-		return cfg.Approvers, nil
+	if len(sources) > 0 {
+		if why := repo.HistoryRewritten(); why != "" {
+			return nil, fmt.Errorf("approvers are listed, so signatures count, but the history is not the real one: %s", why)
+		}
+	}
+	// Only the tips count: a source another one descends from is an older state of the same
+	// history, and what was rotated or removed since must not come back through it.
+	var keys []config.Approver
+	seen := map[string]bool{}
+	for i, src := range sources {
+		older := false
+		for j := range sources {
+			if j != i && sources[j].commit != src.commit && isAncestor(repo, src.commit, sources[j].commit) {
+				older = true
+				break
+			}
+		}
+		if older {
+			continue
+		}
+		for _, a := range src.list {
+			if !seen[a.ID] {
+				seen[a.ID] = true
+				keys = append(keys, a)
+			}
+		}
 	}
 	return keys, nil
+}
+
+// noReplace makes git read the real objects: a replace ref changes what local commands see
+// under a commit id, not what a push sends or what CI checks out.
+const noReplace = "--no-replace-objects"
+
+// Ancestry between two commits never changes, so it is asked once per process.
+var ancestorCache sync.Map
+
+// isAncestor reports whether a is an ancestor of b.
+func isAncestor(repo *gitx.Repo, a, b string) bool {
+	k := a + b
+	if v, ok := ancestorCache.Load(k); ok {
+		return v.(bool)
+	}
+	_, err := repo.Git(noReplace, "merge-base", "--is-ancestor", a, b)
+	ancestorCache.Store(k, err == nil)
+	return err == nil
 }
 
 // resolveCommits resolves refs to commit ids in one git call; "" for a ref that is empty, an
@@ -411,7 +459,7 @@ func resolveCommits(repo *gitx.Repo, refs []string) ([]string, error) {
 		}
 		in.WriteString(r + "^{commit}\n")
 	}
-	out, err := repo.GitInput([]byte(in.String()), "cat-file", "--batch-check=%(objectname)")
+	out, err := repo.GitInput([]byte(in.String()), noReplace, "cat-file", "--batch-check=%(objectname)")
 	if err != nil {
 		return nil, err
 	}
@@ -445,6 +493,18 @@ func approversAtCommit(repo *gitx.Repo, commit string) ([]config.Approver, error
 	return list, nil
 }
 
+// CommittedApprovers returns the approvers the config committed at commit lists.
+func CommittedApprovers(repo *gitx.Repo, commit string) ([]config.Approver, error) {
+	c, err := resolveCommits(repo, []string{commit})
+	if err != nil {
+		return nil, err
+	}
+	if c[0] == "" {
+		return nil, fmt.Errorf("%q is not a commit", commit)
+	}
+	return approversAtCommit(repo, c[0])
+}
+
 var errRefNotFound = errors.New("ref not found")
 
 // approversAt reads the approvers of the config committed at ref; none when it has no config.
@@ -452,15 +512,15 @@ func approversAt(repo *gitx.Repo, ref string) ([]config.Approver, error) {
 	if strings.HasPrefix(ref, "-") {
 		return nil, fmt.Errorf("invalid ref %q", ref)
 	}
-	commit, err := repo.Git("rev-parse", "--verify", "-q", ref+"^{commit}")
+	commit, err := repo.Git(noReplace, "rev-parse", "--verify", "-q", ref+"^{commit}")
 	if err != nil {
 		return nil, fmt.Errorf("base ref %s: %w (in CI, fetch it)", ref, errRefNotFound)
 	}
 	obj := strings.TrimSpace(commit) + ":.truehand/config.yaml"
-	if _, err := repo.Git("cat-file", "-e", obj); err != nil {
+	if _, err := repo.Git(noReplace, "cat-file", "-e", obj); err != nil {
 		return nil, nil
 	}
-	out, err := repo.Git("show", obj)
+	out, err := repo.Git(noReplace, "cat-file", "blob", obj)
 	if err != nil {
 		return nil, err
 	}

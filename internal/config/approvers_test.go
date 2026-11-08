@@ -23,11 +23,11 @@ func approver(id, name, key string) string {
 func TestApprovers(t *testing.T) {
 	_, k1 := signtest.Key(t)
 	_, k2 := signtest.Key(t)
-	cfg, err := config.Parse([]byte(withApprovers(approver("mac", "Emanuel", k1), approver("phone", "Emanuel phone", k2))))
+	cfg, err := config.Parse([]byte(withApprovers(approver("mac", "Alice", k1), approver("phone", "Alice phone", k2))))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Approvers) != 2 || cfg.Approver("phone").Name != "Emanuel phone" || cfg.Approver("nope") != nil {
+	if len(cfg.Approvers) != 2 || cfg.Approver("phone").Name != "Alice phone" || cfg.Approver("nope") != nil {
 		t.Fatalf("%+v", cfg.Approvers)
 	}
 	for name, yaml := range map[string]string{
@@ -37,6 +37,35 @@ func TestApprovers(t *testing.T) {
 		"not a key":      withApprovers(approver("mac", "A", "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----")),
 		"missing key":    withApprovers("  - id: mac\n    name: A\n"),
 		"misspelt field": withApprovers("  - id: mac\n    name: A\n    publicKey: x\n"),
+	} {
+		if _, err := config.Parse([]byte(yaml)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestApproverRSAAndRPID(t *testing.T) {
+	_, ec := signtest.Key(t)
+	_, rsaKey := signtest.RSAKey(t, 2048)
+	_, weak := signtest.RSAKey(t, 1024)
+	withRP := func(key, rp string) string {
+		return withApprovers(approver("phone", "Alice", key) + "    rp_id: " + rp + "\n")
+	}
+	cfg, err := config.Parse([]byte(withRP(rsaKey, "host.tail1234.ts.net")))
+	if err != nil {
+		t.Fatalf("RSA-2048 passkey rejected: %v", err)
+	}
+	if cfg.Approver("phone").RPID != "host.tail1234.ts.net" {
+		t.Fatal(cfg.Approver("phone"))
+	}
+	for name, yaml := range map[string]string{
+		"RSA-1024":       withRP(weak, "host.ts.net"),
+		"rp_id 443":      withRP(ec, "host.ts.net:443"),
+		"rp_id port":     withRP(ec, "host.ts.net:8443"),
+		"rp_id scheme":   withRP(ec, "https://host.ts.net"),
+		"rp_id upper":    withRP(ec, "Host.ts.net"),
+		"rp_id path":     withRP(ec, "host.ts.net/x"),
+		"rp_id bad port": withRP(ec, "host.ts.net:08443"),
 	} {
 		if _, err := config.Parse([]byte(yaml)); err == nil {
 			t.Errorf("%s accepted", name)

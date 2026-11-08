@@ -246,6 +246,9 @@ func (w *Workspace) baseOf(t *board.Task) (string, error) {
 		if _, e := w.Repo.Git("cat-file", "-e", t.Base+"^{commit}"); e == nil {
 			return t.Base, nil
 		}
+		if w.Repo.Shallow() {
+			return "", fmt.Errorf("task %s: the clone is shallow: run `git fetch --unshallow` (no merge-base with %s)", t.ID, t.BaseRef)
+		}
 		return "", fmt.Errorf("task %s: base ref %s not found and start commit %s missing (in CI, fetch full history)", t.ID, t.BaseRef, t.Base)
 	}
 	mb = strings.TrimSpace(mb)

@@ -259,11 +259,14 @@ func TestVerifyIntent(t *testing.T) {
 	}
 }
 
-func TestApproversIntroducedOnBranch(t *testing.T) {
+// H10: approvers listed only in the working tree do not count, whoever wrote them: the key an
+// agent adds there does not approve, and the repo keeps working as one without approvers
+// until the list is committed to the base.
+func TestApproversOnlyFromCommits(t *testing.T) {
 	dir, _ := repo(t)
 	git(t, dir, "remote", "add", "origin", "git@github.com:Spaghetticoders/demo.git")
 	k, pub := signtest.Key(t)
-	write(t, config.Path(dir), testConfig+approversYAML(map[string]string{"mac": pub}))
+	write(t, config.Path(dir), testConfig+approversYAML(map[string]string{"agent": pub}))
 	ws, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -271,14 +274,37 @@ func TestApproversIntroducedOnBranch(t *testing.T) {
 	ws.NewTask("T-1", "x", "")
 	write(t, ws.Store.PlanPath("T-1"), goodPlan)
 	sha := evidence.HashBytes([]byte(goodPlan))
-	ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha, Via: "terminal"})
-	if ok, msg := approvedGate(t, ws); ok {
-		t.Fatalf("unsigned approval with approvers in the config: %s", msg)
+	task, _ := ws.Store.Load("T-1")
+	if list, err := ws.Approvers(task); err != nil || len(list) != 0 {
+		t.Fatalf("working-tree approvers counted: %v %v", list, err)
 	}
-	s := signtest.Sign(t, k, approveIntent(sha))
-	ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha, Sig: &s})
+	s := signtest.Sign(t, k, sign.Intent{
+		Action: sign.ActionApprovePlan, Repo: gate.RepoID(ws.Repo), Task: "T-1", PlanSHA256: sha,
+		Nonce: sign.NewNonce(), Time: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Approver: "agent",
+	})
+	if _, _, err := ws.ApproveSigned("T-1", s); !errors.Is(err, ErrNoApprovers) {
+		t.Fatalf("a working-tree key signed an approval: %v", err)
+	}
+	if ok, msg := approvedGate(t, ws); ok {
+		t.Fatalf("approved with no approval: %s", msg)
+	}
+	ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha, Via: "terminal"})
 	if ok, msg := approvedGate(t, ws); !ok {
-		t.Fatalf("approvers introduced on the branch, nowhere else yet: %s", msg)
+		t.Fatalf("repo without committed approvers lost its unsigned approvals: %s", msg)
+	}
+
+	git(t, dir, "add", config.Path(dir))
+	git(t, dir, "commit", "-q", "-m", "chore: approvers")
+	ws2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, msg := approvedGate(t, ws2); ok {
+		t.Fatalf("unsigned approval once approvers are committed: %s", msg)
+	}
+	ws2.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha, Sig: &s})
+	if ok, msg := approvedGate(t, ws2); !ok {
+		t.Fatalf("committed approver's signature: %s", msg)
 	}
 }
 
@@ -329,7 +355,9 @@ func TestForgedEarlierNonceDoesNotVoid(t *testing.T) {
 	}
 }
 
-func TestApproversFromEveryBaseSource(t *testing.T) {
+// Of the base sources, only the tips count: release descends from main and dropped "mac", so
+// mac no longer signs; a source on a diverged history still adds its approvers.
+func TestApproversFromTheTipSources(t *testing.T) {
 	dir, ws, k, sha := signedSetup(t)
 	phone, phonePub := signtest.Key(t)
 	git(t, dir, "checkout", "-q", "-b", "release")
@@ -339,30 +367,31 @@ func TestApproversFromEveryBaseSource(t *testing.T) {
 	task, _ := ws.Store.Load("T-1")
 	task.BaseRef = "release"
 	ws.Store.Save(task)
-	for _, c := range []struct {
-		key *ecdsa.PrivateKey
-		id  string
-	}{{k, "mac"}, {phone, "phone"}} {
+	sign1 := func(key *ecdsa.PrivateKey, id string) {
 		in := approveIntent(sha)
-		in.Approver = c.id
-		s := signtest.Sign(t, c.key, in)
+		in.Approver = id
+		s := signtest.Sign(t, key, in)
 		ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha, Sig: &s})
-		if ok, msg := approvedGate(t, ws); !ok {
-			t.Fatalf("key %s of a base source refused: %s", c.id, msg)
-		}
+	}
+	sign1(k, "mac")
+	if ok, msg := approvedGate(t, ws); ok {
+		t.Fatalf("mac, dropped on the newer release, still signs: %s", msg)
+	}
+	sign1(phone, "phone")
+	if ok, msg := approvedGate(t, ws); !ok {
+		t.Fatalf("phone of the tip refused: %s", msg)
 	}
 
-	task.BaseRef = "gone"
+	// main moves on without touching the approvers: release and main diverge, both are tips.
+	write(t, filepath.Join(dir, "other.txt"), "x\n")
+	git(t, dir, "add", "other.txt")
+	git(t, dir, "commit", "-q", "-m", "chore: other")
 	ws.Store.Save(task)
 	write(t, ws.Store.PlanPath("T-1"), goodPlan+"\nv2\n")
-	sha2 := evidence.HashBytes([]byte(goodPlan + "\nv2\n"))
-	in := approveIntent(sha2)
-	in.Approver = "phone"
-	s := signtest.Sign(t, phone, in)
-	ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha2, Via: "os-auth:macos"})
-	ws.Store.AppendApproval("T-1", board.Approval{State: board.Approved, PlanSHA: sha2, Sig: &s})
-	if ok, msg := approvedGate(t, ws); ok {
-		t.Fatalf("base ref gone: its key no longer counts and signing is still required, yet: %s", msg)
+	sha = evidence.HashBytes([]byte(goodPlan + "\nv2\n"))
+	sign1(k, "mac")
+	if ok, msg := approvedGate(t, ws); !ok {
+		t.Fatalf("mac of a diverged tip refused: %s", msg)
 	}
 }
 

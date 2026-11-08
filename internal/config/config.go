@@ -38,8 +38,9 @@ type Config struct {
 	Approvers []Approver `yaml:"approvers,omitempty"`
 }
 
-// Approver is a human's signing key: ECDSA P-256, as a PEM PUBLIC KEY. RPID is the WebAuthn
-// relying party, for a key registered in a browser.
+// Approver is a human's signing key: ECDSA P-256, or RSA (at least 2048 bits, exponent 65537)
+// for a passkey, as a PEM PUBLIC KEY. RPID is the WebAuthn relying party (a host name, no port)
+// of a key registered in a browser; its signatures may come from that host on any https port.
 type Approver struct {
 	ID        string `yaml:"id"`
 	Name      string `yaml:"name"`
@@ -219,6 +220,11 @@ func Parse(b []byte) (*Config, error) {
 		seen[a.ID] = true
 		if _, err := sign.ParsePublicKey(a.PublicKey); err != nil {
 			return nil, fmt.Errorf("config: approvers[%d] (%s): %w", i, a.ID, err)
+		}
+		if a.RPID != "" {
+			if err := sign.CheckRPID(a.RPID); err != nil {
+				return nil, fmt.Errorf("config: approvers[%d] (%s): %w", i, a.ID, err)
+			}
 		}
 	}
 	return &c, nil

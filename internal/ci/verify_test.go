@@ -57,7 +57,7 @@ func branch(t *testing.T, approve func(ws *core.Workspace, sha string), tamper f
 		{"config", "core.hooksPath", ".git/hooks"}, {"remote", "add", "origin", "https://github.com/spaghetticoders/demo.git"}} {
 		git(t, dir, a...)
 	}
-	write(t, config.Path(dir), gates+"approvers:\n  - id: mac\n    name: Emanuel\n    public_key: |\n      "+strings.ReplaceAll(strings.TrimSpace(macPub), "\n", "\n      ")+"\n")
+	write(t, config.Path(dir), gates+"approvers:\n  - id: mac\n    name: Alice\n    public_key: |\n      "+strings.ReplaceAll(strings.TrimSpace(macPub), "\n", "\n      ")+"\n")
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-q", "-m", "chore: truehand")
 	git(t, dir, "checkout", "-q", "-b", "feature")

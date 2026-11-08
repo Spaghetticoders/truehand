@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -35,8 +37,10 @@ func (r *Repo) GitInput(stdin []byte, args ...string) (string, error) {
 }
 
 func run(dir string, stdin []byte, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// GIT_GRAFT_FILE makes git print a deprecation hint on stderr, which ends up in our errors.
+	cmd := exec.Command("git", append([]string{"-c", "advice.graftFileDeprecated=false"}, args...)...)
 	cmd.Dir = dir
+	cmd.Env = realObjectsEnv()
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -47,6 +51,43 @@ func run(dir string, stdin []byte, args ...string) (string, error) {
 		return stdout.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// realObjectsEnv is the environment with replace refs and grafts switched off: both change
+// what local commands see under a commit id, not what a push sends or what CI checks out.
+func realObjectsEnv() []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_NO_REPLACE_OBJECTS=") && !strings.HasPrefix(kv, "GIT_GRAFT_FILE=") && !strings.HasPrefix(kv, "GIT_REPLACE_REF_BASE=") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE="+os.DevNull)
+}
+
+// Shallow reports whether the clone has only part of the history.
+func (r *Repo) Shallow() bool {
+	out, err := r.Git("rev-parse", "--is-shallow-repository")
+	return err == nil && strings.TrimSpace(out) == "true"
+}
+
+// HistoryRewritten reports why this clone's history cannot be trusted for ancestry, or "":
+// a shallow clone cuts parents off, and an info/grafts file (ignored by run, but a sign of
+// tampering) invents them.
+func (r *Repo) HistoryRewritten() string {
+	if r.Shallow() {
+		return "the clone is shallow: run `git fetch --unshallow`"
+	}
+	if out, err := r.Git("rev-parse", "--git-common-dir"); err == nil {
+		dir := strings.TrimSpace(out)
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(r.Root, dir)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "info", "grafts")); err == nil {
+			return "the clone has an info/grafts file: remove it"
+		}
+	}
+	return ""
 }
 
 // HasCommits reports whether HEAD points at a commit.

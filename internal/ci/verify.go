@@ -41,6 +41,9 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 	r := &Report{Base: baseRef, Changed: []string{}, Uncovered: []string{}, Tasks: []TaskReport{}, Problems: []string{}}
 	mb, err := ws.Repo.Git("merge-base", "HEAD", baseRef)
 	if err != nil {
+		if ws.Repo.Shallow() {
+			return nil, fmt.Errorf("the CI checkout is shallow: set fetch-depth: 0 in actions/checkout (no merge-base with %s)", baseRef)
+		}
 		return nil, fmt.Errorf("cannot find merge-base with %s (in CI, fetch full history: fetch-depth: 0): %w", baseRef, err)
 	}
 	mb = strings.TrimSpace(mb)
@@ -60,10 +63,15 @@ func Verify(ws *core.Workspace, baseRef string) (*Report, error) {
 		ws = &cp
 		r.GatesFrom = baseRef
 	}
-	// Signed approvals are checked against the approvers listed at the merge-base, whatever
-	// base_ref a task.yaml on this branch names.
+	// Signed approvals are checked against the approvers listed at the tip of the base, whatever
+	// base_ref a task.yaml on this branch names: a branch cannot move that tip, and a key revoked
+	// there no longer signs for branches made before the revocation.
+	tip, err := ws.Repo.Git("rev-parse", "--verify", "-q", baseRef+"^{commit}")
+	if err != nil {
+		return nil, fmt.Errorf("base %s does not resolve to a commit: %w", baseRef, err)
+	}
 	cp := *ws
-	cp.ApproversRef = mb
+	cp.ApproversRef = strings.TrimSpace(tip)
 	ws = &cp
 	out, err := ws.Repo.Git("diff", "--name-only", "--no-renames", mb, "HEAD")
 	if err != nil {
