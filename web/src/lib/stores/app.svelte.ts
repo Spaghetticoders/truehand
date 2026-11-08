@@ -1,6 +1,7 @@
 import { api, ApiError, type Machine, type QueuedAction, type Session, type SessionStatus, type SettingsPatch, type Snapshot, type TaskAction, type TaskSummary, type WaitReason } from '../api'
 import { setLocale, t, type Key } from '../i18n/index.svelte'
 import { shell } from '../api/http'
+import { known } from '../passkeys'
 
 interface AppState {
   ready: boolean
@@ -228,3 +229,6 @@ export function noteQueued(q: QueuedAction) {
 
 /** Actions that need the human factor: from a phone they are queued for the Mac. */
 export const NEEDS_HUMAN: TaskAction[] = ['approve-plan', 'push', 'open-pr']
+
+/** Outside the Mac app, a headless server or a browser holding a passkey signs on the spot instead of queueing. */
+export const passkeySigner = () => !shell() && (!!app.data?.me.headless || !!app.data?.me.owner || known().length > 0)

@@ -1,4 +1,10 @@
 import type {
+  OwnerAction,
+  ApproverKey,
+  IntentRequest,
+  Passkey,
+  PasskeyRegistration,
+  SignedIntent,
   ActionArgs,
   ActResult,
   Activation,
@@ -19,9 +25,10 @@ import type {
   WaitReason,
 } from '../types'
 import { TASK_STATES } from '../types'
-import { ApiError } from '../http'
+import { ApiError, signAsOwner } from '../http'
 import { SPINNER, transcripts } from './transcripts'
-import { activations, CONFIG_YAML, devices, machines, me, projects, queued, rows, sessions, settings, transcriptOf, clients, type Row } from './data'
+import { b64url, fromB64, serverMessage, sha256Hex, subjectOf } from '../../passkeys'
+import { activations, CONFIG_YAML, devices, machines, me, passkeys, revocations, projects, queued, rows, sessions, settings, transcriptOf, clients, type Row } from './data'
 import shotLogin from './shot-login.svg?url'
 import shotReport from './shot-report.svg?url'
 import shotToast from './shot-toast.svg?url'
@@ -32,7 +39,42 @@ const clone = <T>(v: T): T => structuredClone(v)
 const now = () => new Date().toISOString()
 const rid = (p: string) => `${p}${Math.random().toString(16).slice(2, 8)}`
 // The fixture plays the phone at phone widths: no human factor there.
-const canApprove = () => !window.matchMedia('(max-width: 700px)').matches
+const canApprove = () => !headless() && !window.matchMedia('(max-width: 700px)').matches
+// ?headless plays a Linux server without the Mac app: every human action is signed with a passkey.
+const headless = () => /[?&]headless\b/.test(location.search)
+const MOCK_HOST = 'truehand-box.tail1234.ts.net'
+const APPROVERS: ApproverKey[] = [{ id: 'alice-s25', name: 'Alice (Galaxy S25)' }]
+const hex = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, '0')).join('')
+const utc = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+const message = (header: string, fields: [string, string][]) => `${header}\n${fields.map(([k, v]) => `${k}: ${v}\n`).join('')}`
+// The credential id inside authData, after "authData" in the attestation's CBOR (rpIdHash, flags, counter, aaguid, length).
+// The P-256 key in the attestation's COSE key (-2: x, -3: y), as SPKI DER: what the server stores.
+function spkiOf(att: Uint8Array): Uint8Array<ArrayBuffer> | null {
+  for (let i = 0; i + 70 <= att.length; i++) {
+    if (att[i] === 0x21 && att[i + 1] === 0x58 && att[i + 2] === 0x20 && att[i + 35] === 0x22 && att[i + 36] === 0x58 && att[i + 37] === 0x20) {
+      const head = Uint8Array.from([0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04])
+      return Uint8Array.from([...head, ...att.slice(i + 3, i + 35), ...att.slice(i + 38, i + 70)])
+    }
+  }
+  return null
+}
+
+function credentialIdOf(att: Uint8Array): string {
+  const at = new TextDecoder('latin1').decode(att).indexOf('authData') + 8
+  const start = at + (att[at] === 0x59 ? 3 : 2)
+  const off = start + 32 + 1 + 4 + 16
+  const len = (att[off] << 8) | att[off + 1]
+  return b64url(att.slice(off + 2, off + 2 + len))
+}
+const signatureRequired = () => new ApiError(409, 'this repo lists approvers on its base branch: confirm with a signed intent', 'signature-required', { code: 'signature-required', approvers: APPROVERS.map((a) => a.id), approverKeys: APPROVERS })
+const asOwner = async (method: string, path: string, body?: unknown) => {
+  if (headless()) await signAsOwner({ method, path, body: body === undefined ? '' : JSON.stringify(body) })
+}
+const signedOk = (si: SignedIntent | undefined, action: string) => {
+  const i = si?.intent as Record<string, string> | undefined
+  if (!si || si.format !== 'webauthn' || !si.sig || !si.authenticator_data || !si.client_data_json || i?.action !== action) throw new ApiError(403, `signed intent refused: not a ${action}`)
+}
 const live = (s: Session) => s.status !== 'exited'
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
 
@@ -141,8 +183,8 @@ export class FixtureApi implements Api {
       tasks: rows.map(summary),
       sessions,
       settings,
-      me: canApprove() ? { via: 'token', canApprove: true, readOnly: false } : { via: 'device', canApprove: false, deviceName: 'Galaxy S25', readOnly: false },
-      queued,
+      me: canApprove() ? { via: 'token', canApprove: true, readOnly: false } : { via: 'device', canApprove: false, deviceName: 'Galaxy S25', readOnly: false, headless: headless() },
+      queued: headless() ? [] : queued,
       machines,
     } satisfies Snapshot)
   }
@@ -169,6 +211,7 @@ export class FixtureApi implements Api {
   }
 
   async deleteDevice(id: string) {
+    await asOwner('DELETE', `/api/devices/${id}`)
     const i = devices.findIndex((d) => d.id === id)
     if (i >= 0) devices.splice(i, 1)
     settings.remote.devices = settings.remote.devices.filter((d) => d.id !== id)
@@ -177,7 +220,8 @@ export class FixtureApi implements Api {
   async rotateToken() {}
 
   async updateSettings(s: SettingsPatch) {
-    if (s.remote && !canApprove()) throw new ApiError(403, 'this needs you at the Mac, in the Truehand app')
+    if (s.remote) await asOwner('PUT', '/api/settings', s)
+    if (s.remote && !canApprove() && !headless()) throw new ApiError(403, 'this needs you at the Mac, in the Truehand app')
     if (s.language) settings.language = s.language
     if (s.defaultPermissionMode) settings.defaultPermissionMode = s.defaultPermissionMode
     if (s.remote) Object.assign(settings.remote, s.remote)
@@ -227,10 +271,28 @@ export class FixtureApi implements Api {
     return null
   }
 
+  private baseHasApprovers(pid: string) {
+    return /^approvers:/m.test(this.config(pid).baseYaml ?? '')
+  }
+
+  private live = new Map<string, Activation & { baseYaml: string }>()
+
+  private config(pid: string): Activation & { baseYaml?: string } {
+    if (!this.project(pid).active) return activations[pid] ?? activations.p_5e6f7a8b
+    let a = this.live.get(pid)
+    if (!a) {
+      // The Truehand project's base already lists an approver: removing it shows what that means.
+      const yaml = pid === 'p_9c0d1e2f' ? `${CONFIG_YAML}\napprovers:\n  - id: alice-mac\n    name: Alice (MacBook)\n    public_key: |\n      -----BEGIN PUBLIC KEY-----\n      MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmac\n      -----END PUBLIC KEY-----\n` : CONFIG_YAML
+      const approvers = pid === 'p_9c0d1e2f' ? [{ id: 'alice-mac', name: 'Alice (MacBook)', key: '5b1e09c4a7d2' }] : []
+      a = { hasConfig: true, configYaml: yaml, baseYaml: yaml, approvers, stack: 'flutter', base: 'origin/main', gitHooks: { 'commit-msg': 'ours', 'pre-push': 'ours' }, configCommitted: true, configSha256: hex(32) }
+      this.live.set(pid, a)
+    }
+    return a
+  }
+
+
   async activation(pid: string): Promise<Activation> {
-    const p = this.project(pid)
-    if (p.active) return { hasConfig: true, configYaml: CONFIG_YAML, stack: 'flutter', base: 'origin/main', gitHooks: { 'commit-msg': 'ours', 'pre-push': 'ours' }, configCommitted: true }
-    return clone(activations[pid] ?? activations.p_5e6f7a8b)
+    return clone(this.config(pid))
   }
 
   async activate(pid: string, o: { stack?: string; base?: string; forceHooks?: boolean }) {
@@ -249,30 +311,229 @@ export class FixtureApi implements Api {
   }
 
   async putConfig(pid: string, yaml: string) {
-    if (!canApprove()) {
+    await asOwner('PUT', `/api/projects/${pid}/config`, { yaml })
+    if (!canApprove() && !headless()) {
       queued.push({ id: rid('q_'), kind: 'config', projectId: pid, taskId: '', device: 'Galaxy S25', time: now() })
       return { queued: true as const }
     }
-    const a = activations[pid] ?? activations.p_5e6f7a8b
+    const a = this.config(pid)
+    if (a.baseYaml !== undefined && yaml !== a.configYaml) {
+      const base = a.baseYaml.split('\n')
+      const now = yaml.split('\n')
+      const plus = now.filter((l) => !base.includes(l))
+      const minus = base.filter((l) => !now.includes(l))
+      a.configDiff = plus.length || minus.length ? `--- a/.truehand/config.yaml\n+++ b/.truehand/config.yaml\n@@ approvers @@\n${[...minus.map((l) => `-${l}`), ...plus.map((l) => `+${l}`)].join('\n')}\n` : ''
+      a.configCommitted = !a.configDiff
+      a.configSha256 = hex(32)
+      const ids = (t: string) => [...t.matchAll(/- id: (\S+)(?:\n\s+name: "?([^"\n]+))?/g)].map((m) => ({ id: m[1], name: m[2] ?? m[1], key: hex(6) }))
+      const baseIds = ids(a.baseYaml)
+      const nowIds = ids(yaml)
+      a.approversAdded = nowIds.filter((x) => !baseIds.some((y) => y.id === x.id))
+      a.approversRemoved = baseIds.filter((x) => !nowIds.some((y) => y.id === x.id))
+      a.approvers = nowIds
+    }
     a.configYaml = yaml
     a.configError = /^version:\s*0\s*$/m.test(yaml) ? undefined : 'config.yaml: version: field missing or unsupported'
     return clone(a)
   }
 
-  async commitConfig(pid: string, configSha256: string): Promise<ActResult> {
-    if (!canApprove()) {
+  async commitConfig(pid: string, configSha256: string, signedIntent?: SignedIntent): Promise<ActResult> {
+    if (headless() && !this.baseHasApprovers(pid)) await asOwner('POST', `/api/projects/${pid}/commit-config`, { configSha256 })
+    else if (headless()) {
+      if (!signedIntent) throw signatureRequired()
+      signedOk(signedIntent, 'commit-config')
+    } else if (!canApprove()) {
       queued.push({ id: rid('q_'), kind: 'commit-config', projectId: pid, taskId: '', configSha256, device: 'Galaxy S25', time: now() })
       return { ok: true, queued: true }
     }
-    const a = activations[pid] ?? activations.p_5e6f7a8b
+    const a = this.config(pid)
     a.configCommitted = true
-    a.configDiff = ''
+    if (!headless()) a.configDiff = ''
     this.changed(pid)
     return { ok: true }
   }
 
   macKeyFingerprint() {
     return null
+  }
+
+  anchorPasskey() {
+    return null
+  }
+
+  revokeOwner() {
+    return null
+  }
+
+  // The origin as the server names it in an intent: host/owner/repo, from the project's client and folder.
+  private repoOf(pid: string) {
+    const p = this.project(pid)
+    return `github.com/${p.clientId}/${p.path.split('/').pop()}`
+  }
+
+  private intentFor(pid: string, action: string, task: string, sha: string, approver: string, head = ''): IntentRequest {
+    const fields: [string, string][] = [
+      ['action', action],
+      ['repo', this.repoOf(pid)],
+      ['task', task],
+      ['plan_sha256', sha],
+      ['head', head],
+      ['nonce', hex(16)],
+      ['time', utc()],
+      ['approver', approver],
+    ]
+    return { intent: Object.fromEntries(fields), message: b64(message('truehand-intent/1', fields)) }
+  }
+
+  async configIntent(pid: string, action: 'commit-config' | 'push-base', configSha256: string, approver?: string) {
+    this.project(pid)
+    if (action !== 'push-base') return this.intentFor(pid, action, 'config', configSha256, approver ?? APPROVERS[0].id)
+    const head = hex(20)
+    const other = /[?&]otherfiles\b/.test(location.search)
+    const commits = [{ sha: hex(20), subject: 'chore(truehand): add truehand config', files: ['.truehand/config.yaml'] }]
+    if (other) commits.push({ sha: hex(20), subject: 'chore: update scripts', files: ['.truehand/config.yaml', 'scripts/release.sh'] })
+    commits[commits.length - 1].sha = head
+    const intent = this.intentFor(pid, action, 'config', configSha256, approver ?? APPROVERS[0].id, head)
+    // ?nopreview plays an older server, to check the page refuses to sign blind.
+    return /[?&]nopreview\b/.test(location.search) ? intent : { ...intent, push: { from: hex(20), head, commits, onlyConfig: !other } }
+  }
+
+  async pushPreview(pid: string) {
+    const r = await this.configIntent(pid, 'push-base', '', APPROVERS[0].id)
+    return { push: r.push, approvers: this.baseHasApprovers(pid) ? APPROVERS.map((a) => a.id) : [], approverKeys: this.baseHasApprovers(pid) ? APPROVERS : [] }
+  }
+
+  async pushBase(pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }): Promise<ActResult> {
+    if (!signedIntent && headless() && !(shown?.from && shown.head)) throw new ApiError(409, 'push-base needs the from and head that were shown', 'base-moved')
+    const head = shown?.head
+    if (headless() && !this.baseHasApprovers(pid)) {
+      await asOwner('POST', `/api/projects/${pid}/push-base`, { from: shown?.from, head })
+      if (/[?&]basemoved\b/.test(location.search)) throw new ApiError(409, `base moved: origin/main is now ${hex(20)}, not the commit you confirmed`, 'base-moved')
+    }
+    else if (headless()) {
+      if (!signedIntent) throw signatureRequired()
+      signedOk(signedIntent, 'push-base')
+    } else if (!canApprove()) throw new ApiError(403, 'this needs you at the Mac, in the Truehand app')
+    const a = this.config(pid)
+    a.configDiff = ''
+    a.approversAdded = []
+    a.approversRemoved = []
+    if (a.baseYaml !== undefined) a.baseYaml = a.configYaml
+    this.changed(pid)
+    return { ok: true, output: 'To github.com:acme/app.git\n   1a2b3c4..5d6e7f8  main -> main' }
+  }
+
+  async taskIntent(pid: string, id: string, action: TaskAction, approver: string) {
+    const r = this.row(pid, id)
+    const head = action === 'approve-plan' ? '' : hex(20)
+    return { ...this.intentFor(r.projectId, action, r.id, r.planSha256 ?? '', approver, head), title: r.title, branch: action === 'approve-plan' ? '' : `th/${r.id}` }
+  }
+
+  private host(p: Passkey): Passkey {
+    return { ...p, rpId: p.rpId === MOCK_HOST ? location.hostname : p.rpId }
+  }
+
+  async passkeys() {
+    const list = passkeys.map((p) => this.host(p))
+    // A broken revocation list suspends every owner, as on the server.
+    return { rpId: location.hostname, headless: headless(), hasOwner: !/[?&]revocerr\b/.test(location.search) && list.some((p) => p.ownerValid), passkeys: list, revocations: clone(revocations), revocationsError: /[?&]revocerr\b/.test(location.search) ? '/etc/truehand/revoked.json: unexpected end of JSON input' : undefined, revocationsCode: /[?&]revocerr\b/.test(location.search) ? ('revoked-list-invalid' as const) : undefined }
+  }
+
+  async passkeyCode(owner: boolean) {
+    await asOwner('POST', '/api/passkeys/enroll-code', { owner })
+    return { ...(await this.pairCode()), owner }
+  }
+
+  private ceremonies = new Map<string, { label: string; owner: boolean }>()
+
+  async passkeyOptions(o: { code: string; label: string }) {
+    if (o.code.replace(/[-\s]/g, '').length !== 8) throw new ApiError(401, 'wrong or expired code')
+    const ceremony = rid('c_')
+    const owner = !passkeys.some((p) => p.ownerValid) || /^[A-H]/.test(o.code)
+    this.ceremonies.set(ceremony, { label: o.label, owner })
+    const u64 = (n: number) => btoa(hex(n)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+    return {
+      ceremony,
+      owner,
+      publicKey: {
+        challenge: u64(32),
+        rp: { id: location.hostname, name: 'Truehand' },
+        user: { id: u64(16), name: 'truehand@box', displayName: 'Truehand box' },
+        pubKeyCredParams: [
+          { type: 'public-key' as const, alg: -7 },
+          { type: 'public-key' as const, alg: -257 },
+        ],
+        timeout: 300_000,
+        excludeCredentials: passkeys.filter((p) => this.host(p).rpId === location.hostname).map((p) => ({ type: 'public-key' as const, id: p.id })),
+        authenticatorSelection: { userVerification: 'required' as const, residentKey: 'preferred' as const },
+        attestation: 'none' as const,
+      },
+    }
+  }
+
+  async registerPasskey(r: PasskeyRegistration) {
+    const c = this.ceremonies.get(r.ceremony)
+    this.ceremonies.delete(r.ceremony)
+    if (!c) throw new ApiError(401, 'registration expired: start again')
+    const cdj = JSON.parse(new TextDecoder().decode(fromB64(r.clientDataJSON)))
+    if (cdj.type !== 'webauthn.create') throw new ApiError(400, 'passkey refused: not a registration')
+    const att = fromB64(r.attestationObject)
+    const id = credentialIdOf(att)
+    const der = spkiOf(att)
+    const publicKey = der ? `-----BEGIN PUBLIC KEY-----\n${btoa(String.fromCharCode(...der))}\n-----END PUBLIC KEY-----` : `-----BEGIN PUBLIC KEY-----\nMFkw${hex(30)}\n-----END PUBLIC KEY-----`
+    const key = der ? (await sha256Hex(der)).slice(0, 12) : hex(6)
+    const p: Passkey = {
+      id,
+      label: c.label,
+      rpId: location.hostname,
+      alg: 'ES256',
+      owner: c.owner,
+      ownerValid: c.owner,
+      synced: false,
+      syncable: true,
+      signCount: 0,
+      device: 'd_here',
+      thisDevice: true,
+      key,
+      publicKey,
+      created: now(),
+    }
+    passkeys.push(p)
+    if (!devices.some((d) => d.id === 'd_here')) devices.push({ id: 'd_here', name: c.label, created: now(), lastSeen: now(), current: true })
+    return clone(p)
+  }
+
+  async deletePasskey(id: string, owner?: string) {
+    if (!owner) await asOwner('DELETE', `/api/passkeys/${id}`)
+    const i = passkeys.findIndex((p) => p.id === id)
+    if (i >= 0) {
+      const [p] = passkeys.splice(i, 1)
+      if (p.owner && p.ownerValid) revocations.unshift({ id: p.id, key: p.key, label: p.label, revoked: 'soft', time: now() })
+    }
+    return { orphaned: [] }
+  }
+
+  async grantPasskey(id: string, owner: string) {
+    if (!owner) throw new ApiError(403, 'confirm with an owner\'s passkey')
+    const p = passkeys.find((p) => p.id === id)
+    if (!p || !p.owner || p.ownerValid) throw new ApiError(409, 'that passkey is not waiting to become an owner')
+    p.ownerValid = true
+    p.pending = undefined
+  }
+
+  async ownerChallenge(r: { credential: string; action: OwnerAction; method?: string; path?: string; bodySha256?: string; passkey?: string }) {
+    const target = passkeys.find((p) => p.id === r.passkey)
+    const subject =
+      r.action === 'owner'
+        ? await subjectOf({ body_sha256: r.bodySha256 ?? '', method: r.method ?? '', path: r.path ?? '' })
+        : r.action === 'add-owner' && target
+          ? await subjectOf({ credential: target.id, public_key_sha256: await sha256Hex(target.publicKey.trim()), rp_id: this.host(target).rpId })
+          : hex(32)
+    const intent = { action: r.action, server: location.hostname, subject, nonce: hex(16), time: utc(), credential: r.credential }
+    const bytes = serverMessage(intent)
+    const challenge = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+    const u = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+    return { intent, key: target?.key, publicKey: { challenge: u(challenge), rpId: location.hostname, allowCredentials: [{ type: 'public-key' as const, id: r.credential }], userVerification: 'required', timeout: 120_000 } }
   }
 
   async fetchRemote(pid: string) {
@@ -445,6 +706,11 @@ export class FixtureApi implements Api {
       case 'approve-plan':
       case 'push':
       case 'open-pr':
+        if (headless()) {
+          if (!args.signedIntent) throw signatureRequired()
+          signedOk(args.signedIntent, action)
+          return this.run(r, action, args)
+        }
         if (this.remote(pid) && canApprove()) throw new ApiError(409, 'configure approvers to approve remotely', 'remote-approval-unavailable')
         if (!canApprove()) return this.queue(r, action === 'approve-plan' ? 'approve' : action === 'push' ? 'push' : 'pr')
         return this.run(r, action, action === 'approve-plan' && !args.planSha256 ? { planSha256: r.planSha256 } : args)

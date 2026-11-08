@@ -9,6 +9,7 @@ export type Route =
   | { name: 'settings' }
   | { name: 'activate'; project: string }
   | { name: 'pair'; code?: string }
+  | { name: 'enroll'; code?: string }
 
 function parse(hash: string): Route {
   const [path, query = ''] = hash.replace(/^#\/?/, '').split('?')
@@ -33,6 +34,8 @@ function parse(hash: string): Route {
       return { name: 'activate', project: parts[1] ?? '' }
     case 'pair':
       return { name: 'pair', code: q.get('code') ?? undefined }
+    case 'enroll':
+      return { name: 'enroll', code: q.get('code') ?? undefined }
     default:
       return { name: 'board', project: q.get('project') ?? undefined, bucket: q.get('bucket') ?? undefined }
   }
@@ -55,6 +58,8 @@ export function href(r: Route): string {
       return `#/activate/${encodeURIComponent(r.project)}`
     case 'pair':
       return r.code ? `#/pair?code=${encodeURIComponent(r.code)}` : '#/pair'
+    case 'enroll':
+      return r.code ? `#/enroll?code=${encodeURIComponent(r.code)}` : '#/enroll'
     case 'board': {
       const q = new URLSearchParams()
       if (r.project) q.set('project', r.project)
@@ -63,6 +68,12 @@ export function href(r: Route): string {
       return `#/${qs ? `?${qs}` : ''}`
     }
   }
+}
+
+// `truehand passkey bootstrap` prints https://<host>/enroll: a path, not a hash route.
+if (!location.hash && /\/enroll\/?$/.test(location.pathname)) {
+  const code = new URLSearchParams(location.search).get('code')
+  history.replaceState(null, '', `${location.pathname.replace(/enroll\/?$/, '')}${href({ name: 'enroll', code: code ?? undefined })}`)
 }
 
 export const router = $state<{ route: Route }>({ route: parse(location.hash) })

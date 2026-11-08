@@ -1,4 +1,4 @@
-import type { Actor, Activation, Check, Client, Comment, Device, DiffFile, Machine, Project, Proof, QueuedAction, Session, Settings, TaskDetail, TaskState } from '../types'
+import type { Actor, Activation, Check, Client, Comment, Device, DiffFile, Machine, Passkey, Project, Proof, QueuedAction, Session, Settings, TaskDetail, TaskState } from '../types'
 
 export const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
@@ -10,20 +10,20 @@ const unbound: Actor = { id: 'claude:pid-48211', kind: 'agent', name: 'pid-48211
 export const machines: Machine[] = [
   { id: 'local', label: 'MacBook Pro', os: 'darwin', arch: 'arm64', status: 'online', version: '0.9.0', tools: { claude: true, git: true, gh: true }, canApprove: true },
   { id: 'm_a1b2c3d4', label: 'Mac mini', sshTarget: 'mac-mini.esempio.ts.net', os: 'darwin', arch: 'arm64', status: 'online', version: '0.9.0', tools: { claude: true, git: true, gh: false }, canApprove: false },
-  { id: 'm_9f8e7d6c', label: 'PC gaming', sshTarget: 'pcgaming', os: 'linux', arch: 'amd64', status: 'offline', version: '0.9.0', tools: { claude: true, git: true, gh: true }, canApprove: false },
+  { id: 'm_9f8e7d6c', label: 'Devbox Linux', sshTarget: 'devbox', os: 'linux', arch: 'amd64', status: 'offline', version: '0.9.0', tools: { claude: true, git: true, gh: true }, canApprove: false },
 ]
 
 export const clients: Client[] = [
   { id: 'acme-retail', name: 'Acme Retail' },
-  { id: 'spaghetticoders', name: 'Spaghetticoders' },
+  { id: 'studio-demo', name: 'Studio Demo' },
 ]
 
 export const projects: Project[] = [
   { id: 'p_1a2b3c4d', clientId: 'acme-retail', name: 'App Cassa', path: '~/Projects/app-cassa', key: 'CASSA', active: true, branch: 'main', machineId: 'local' },
   { id: 'p_5e6f7a8b', clientId: 'acme-retail', name: 'Sito vetrina', path: '~/Projects/sito-vetrina', key: '', active: false, branch: 'main', machineId: 'local' },
   { id: 'm_a1b2c3d4~p_77aa8899', clientId: 'acme-retail', name: 'Gestionale ordini', path: '~/Projects/gestionale-ordini', key: 'GO', active: true, branch: 'main', machineId: 'm_a1b2c3d4' },
-  { id: 'p_9c0d1e2f', clientId: 'spaghetticoders', name: 'Truehand', path: '~/Projects/truehand', key: 'TH', active: true, branch: 'feat/app-v2', machineId: 'local' },
-  { id: 'm_9f8e7d6c~p_31bc22aa', clientId: 'spaghetticoders', name: 'Wovio', path: '~/code/wovio', key: 'WV', active: true, branch: 'main', machineId: 'm_9f8e7d6c' },
+  { id: 'p_9c0d1e2f', clientId: 'studio-demo', name: 'Truehand', path: '~/Projects/truehand', key: 'TH', active: true, branch: 'feat/app-v2', machineId: 'local' },
+  { id: 'm_9f8e7d6c~p_31bc22aa', clientId: 'studio-demo', name: 'App fitness', path: '~/code/app-fitness', key: 'FIT', active: true, branch: 'main', machineId: 'm_9f8e7d6c' },
 ]
 
 export type Row = Omit<TaskDetail, 'waitReason' | 'primaryAction' | 'sessionIds' | 'readOnly' | 'planReady' | 'hasOpenQuestion'> & {
@@ -152,7 +152,7 @@ export const rows: Row[] = [
     externalTicket: 'LIN-482',
     scope: ['lib/receipt/**', 'test/receipt/**'],
     description:
-      'Alla fine del pagamento il cassiere può inserire l’email del cliente e mandargli lo scontrino.\n\nRichiesta arrivata dal negozio di via Sparano: **molti clienti non vogliono la carta**.\n\n<script>alert(2)</script><img src=x onerror="alert(1)" hidden>',
+      'Alla fine del pagamento il cassiere può inserire l’email del cliente e mandargli lo scontrino.\n\nRichiesta arrivata dal negozio in centro: **molti clienti non vogliono la carta**.\n\n<script>alert(2)</script><img src=x onerror="alert(1)" hidden>',
     comments: [
       comment(90, me, 'Priorità alta, il cliente lo chiede da settimane.'),
       { ...comment(16, dev('CASSA-12'), 'Piano pronto. Domanda: lo scontrino va **allegato in PDF** o basta un **link** alla versione online?'), openQuestion: true },
@@ -321,7 +321,7 @@ export const rows: Row[] = [
     state: 'delivered',
     updated: 60 * 30,
     pushed: true,
-    prUrl: 'https://github.com/spaghetticoders/truehand/pull/88',
+    prUrl: 'https://github.com/studio-demo/truehand/pull/88',
     description: 'Campo di ricerca sopra la board.',
   }),
   row({ id: 'SITO-2', projectId: 'p_5e6f7a8b', title: 'Pagina contatti con mappa', state: 'planned', updated: 60 * 26, description: 'Modulo contatti e mappa del negozio.' }),
@@ -339,7 +339,7 @@ export const rows: Row[] = [
     checks: [check('plan_valid', 'approved', 'pass'), check('human_approval', 'approved', 'fail', 'no approval')],
   }),
   row({ id: 'GO-2', projectId: 'm_a1b2c3d4~p_77aa8899', title: 'Filtro ordini per stato', state: 'building', updated: 90, worktree: '~/.truehand/worktrees/p_77aa8899/GO-2', description: 'Filtro per stato nella lista ordini.', plan: PLAN_GENERIC }),
-  row({ id: 'WV-9', projectId: 'm_9f8e7d6c~p_31bc22aa', title: 'Timer di recupero tra le serie', state: 'building', updated: 60 * 20, description: 'Timer configurabile tra una serie e l’altra.' }),
+  row({ id: 'FIT-9', projectId: 'm_9f8e7d6c~p_31bc22aa', title: 'Timer di recupero tra le serie', state: 'building', updated: 60 * 20, description: 'Timer configurabile tra una serie e l’altra.' }),
 ]
 
 const sess = (id: string, projectId: string, taskId: string | undefined, role: Session['role'], status: Session['status'], startedMin: number, extra: Partial<Session> = {}): Session => ({
@@ -381,6 +381,60 @@ export const transcriptOf: Record<string, string> = {
 }
 
 export const queued: QueuedAction[] = [{ id: 'q_71ab', kind: 'approve', projectId: 'p_9c0d1e2f', taskId: 'TH-23', planSha256: 'bb22', device: 'Galaxy S25', time: ago(9) }]
+
+const PEM = (body: string) => `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----`
+
+const pk = (p: Partial<Passkey> & Pick<Passkey, 'id' | 'label' | 'rpId' | 'publicKey'>): Passkey => ({ alg: 'ES256', owner: false, ownerValid: false, synced: false, syncable: false, signCount: 0, thisDevice: false, key: '', created: ago(60 * 24 * 3), ...p })
+
+export const passkeys: Passkey[] = [
+  pk({
+    id: 'AVd3o1s25credQ',
+    label: 'Galaxy S25 Ultra',
+    device: 'd_s25',
+    synced: true,
+    syncable: true,
+    rpId: 'truehand-box.tail1234.ts.net',
+    lastUsed: ago(42),
+    owner: true,
+    ownerValid: true,
+    key: 'b41abba06527',
+    publicKey: PEM('MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1viIELl+5cs8zyJaDwEsttRjE64jsbcyWTiZu+CKh4GFW3K7YHPmdsc2cM81gqllKBdlghV8QXl0wd7V/nF/Sw=='),
+  }),
+  pk({
+    id: 'YubiKey5cred',
+    label: 'YubiKey 5C',
+    rpId: 'truehand-box.tail1234.ts.net',
+    created: ago(60 * 24 * 20),
+    owner: true,
+    pending: 'owner',
+    key: 'd5e9621385bd',
+    publicKey: PEM('MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6969rscbD92CeUTZjqVHcbXrZ19VVgx4WihNwADZ01KAa2Pkv45WrlKc9/jZ3vzbN/2j3RKMbuFwaMI0demLZw=='),
+  }),
+  pk({
+    id: 'aVBob25lMTZleHA',
+    label: 'iPhone 16',
+    rpId: 'truehand-box.tail1234.ts.net',
+    created: ago(90),
+    owner: true,
+    pending: 'expired',
+    key: '0ba8e47b5e92',
+    publicKey: PEM('MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi6RrSpBND36SuanQEAdVTA7h/hr8uH7mevxI7skIij6YciruzyYeoqKKVWT+XmYt72HZ1U54GBYpVPsC5OtKsw=='),
+  }),
+  pk({
+    id: 'oldWinHello',
+    label: 'PC Windows',
+    alg: 'RS256',
+    rpId: 'devbox.tail1234.ts.net',
+    created: ago(60 * 24 * 40),
+    lastUsed: ago(60 * 24 * 12),
+    key: 'fc68b8f3e612',
+    publicKey: PEM('MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqkPY/RaCO2zxQcAmbc2SnvJB2Ng+LZ9OZlLaU1tc+ViAAGs7FW/D6d1ss6fylKrTTwtmAerGu3QvmyItx5OHiwGxzjvn/lZGJWb3B/py+eZsQMK2l4XImkGxkT1VDPGAFpcv2OSeFVNATeNZ3EeS7Ld5tFoIgmDtdQ4rD54wpNQxB6lVicHAgPtwdXJQ9sNR4z0WTpzj5OrhaxG+idhhCJek6+I2qrtcBbspCS+Om37iUVIEaLzpY83GnlmGVOTad/u/EYyyajrjISNnlKosymaHPj4sMPdj2u+EpUUM7OzfRGiXnqB/IKDPjBre9E9fxbvyOgRwcl5DdaarJ/6mKwIDAQAB'),
+  }),
+]
+
+export const revocations: { id: string; key?: string; label?: string; revoked: 'soft' | 'durable'; time: string }[] = [
+  { id: 'Q2xvbmVkUGl4ZWw3', key: '9e01c4ab72d5', label: 'Pixel 7 (perso)', revoked: 'durable', time: ago(60 * 24 * 6) },
+]
 
 export const devices: Device[] = [{ id: 'd_s25', name: 'Galaxy S25', created: ago(60 * 24 * 2), lastSeen: ago(9), current: false }]
 

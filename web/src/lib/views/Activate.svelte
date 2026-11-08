@@ -7,7 +7,10 @@
   import { t, timeAgo } from '../i18n/index.svelte'
   import { app, clientName, noteQueued, project, refresh } from '../stores/app.svelte'
   import { href } from '../stores/router.svelte'
-  import { confirmQueued, discardQueued, errorText, toast } from '../stores/actions.svelte'
+  import { confirmQueued, discardQueued, errorDetail, errorText, toast } from '../stores/actions.svelte'
+  import { approverKeys, passkeyHere, signConfig, withOwnerContext } from '../stores/sign.svelte'
+  import type { ActResult, PushPreview } from '../api'
+  import { groupKey, PasskeyError } from '../passkeys'
 
   let { projectId }: { projectId: string } = $props()
 
@@ -19,6 +22,7 @@
   let force = $state(false)
   let saving = $state(false)
   let error = $state<string | null>(null)
+  let errorMore = $state<string | null>(null)
   let dirty = $state(false)
   let macKey = $state<string | null>(null)
 
@@ -46,6 +50,7 @@
       loaded = true
     } catch (e) {
       error = errorText(e)
+      errorMore = errorDetail(e)
     }
   }
 
@@ -66,6 +71,7 @@
   async function saveConfig() {
     saving = true
     error = null
+    errorMore = null
     try {
       const r = await api.putConfig(projectId, yaml)
       if ('queued' in r) {
@@ -77,6 +83,7 @@
       }
     } catch (e) {
       error = errorText(e)
+      errorMore = errorDetail(e)
     } finally {
       saving = false
     }
@@ -85,6 +92,7 @@
   async function activate() {
     saving = true
     error = null
+    errorMore = null
     try {
       if (dirty) await saveConfig()
       await api.activate(projectId, { stack, base, forceHooks: force })
@@ -93,27 +101,64 @@
       toast('ok', t('activate.done', { name: proj?.name ?? '' }))
     } catch (e) {
       error = errorText(e)
+      errorMore = errorDetail(e)
     } finally {
       saving = false
     }
   }
 
-  async function commit() {
+  /** Where the repo already lists approvers, outside the Mac app one of them signs with a passkey. */
+  async function signed(action: 'commit-config' | 'push-base', run: (si?: Parameters<typeof api.pushBase>[1]) => Promise<ActResult>, sha: string, push?: PushPreview) {
+    try {
+      return await withOwnerContext({ diff: a?.configDiff, push }, () => run())
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === 'signature-required' && passkeyHere())) throw e
+      return run(await signConfig(projectId, action, sha, approverKeys(e.body), `${clientName(proj?.clientId ?? '')} / ${proj?.name ?? ''}`, a?.configDiff))
+    }
+  }
+
+  async function pushBase() {
     if (!a?.configSha256) return
     saving = true
     error = null
+    errorMore = null
     try {
-      const r = await api.commitConfig(projectId, a.configSha256)
+      // What leaves is shown and bound before anyone confirms: without it, nothing is pushed.
+      const preview = (await api.pushPreview(projectId)).push
+      if (!preview?.head || !preview.from) throw new PasskeyError('no-preview')
+      const r = await signed('push-base', (si) => api.pushBase(projectId, si, si ? undefined : { from: preview.from, head: preview.head }), a.configSha256, preview)
+      if (r.queued) toast('queued', t('action.queued'))
+      else if (!r.ok) throw new Error([r.error, r.output?.trim()].filter(Boolean).join(': '))
+      else toast('ok', t('activate.pushed', { base: a.base }))
+      await load()
+    } catch (e) {
+      error = errorText(e)
+      errorMore = errorDetail(e)
+    } finally {
+      saving = false
+      void refresh()
+    }
+  }
+
+  async function commit() {
+    if (!a?.configSha256) return
+    const sha = a.configSha256
+    saving = true
+    error = null
+    errorMore = null
+    try {
+      const r = await signed('commit-config', (si) => api.commitConfig(projectId, sha, si), sha)
       if (r.queued) {
         if (r.queuedId) noteQueued({ id: r.queuedId, kind: 'commit-config', projectId, taskId: '', configSha256: a.configSha256, device: t('queuedKind.thisDevice'), time: new Date().toISOString() })
         toast('queued', t('action.queued'))
-      } else if (!r.ok) throw new Error(r.error)
+      } else if (!r.ok) throw new Error([r.error, r.output?.trim()].filter(Boolean).join(': '))
       else {
         toast('ok', t('activate.committed', { base: localBase || a.base }))
       }
       await load()
     } catch (e) {
       error = errorText(e)
+      errorMore = errorDetail(e)
       if (e instanceof ApiError && e.code === 'config-changed') await load()
     } finally {
       saving = false
@@ -173,8 +218,8 @@
       </ul>
       {#if foreign && !proj?.active}
         <label class="force">
-          <input type="checkbox" bind:checked={force} disabled={!app.data?.me.canApprove} />
-          <span>{t('activate.force')}{#if !app.data?.me.canApprove}<small>{t('activate.forceMacOnly')}</small>{/if}</span>
+          <input type="checkbox" bind:checked={force} disabled={!canApprove && !app.data?.me.headless} />
+          <span>{t('activate.force')}{#if !canApprove && !app.data?.me.headless}<small>{t('activate.forceMacOnly')}</small>{/if}</span>
         </label>
       {/if}
     </section>
@@ -220,7 +265,7 @@
               <li>
                 <span class="ap-name"><Reveal text={x.name || x.id} /></span>
                 <code class="ap-id"><Reveal text={x.id} /></code>
-                <code class="ap-key">{t('activate.key', { key: x.key })}</code>
+                <code class="ap-key">{t('activate.key', { key: groupKey(x.key) })}</code>
                 {#if w}<span class="chip {w === 'mine' ? 'ok' : 'warn'}">{t(w === 'mine' ? 'activate.thisMac' : 'activate.foreignKey')}</span>{/if}
                 {#if added.has(x.id + x.key)}<span class="chip info">{t('activate.approverAdded')}</span>{/if}
               </li>
@@ -229,7 +274,7 @@
               <li class="removed">
                 <span class="ap-name"><Reveal text={x.name || x.id} /></span>
                 <code class="ap-id"><Reveal text={x.id} /></code>
-                <code class="ap-key">{t('activate.key', { key: x.key })}</code>
+                <code class="ap-key">{t('activate.key', { key: groupKey(x.key) })}</code>
                 <span class="chip idle">{t('activate.approverRemoved')}</span>
               </li>
             {/each}
@@ -237,6 +282,7 @@
         {:else}
           <p class="muted small">{t('activate.noApprovers')}</p>
         {/if}
+        {#if a.approversRemoved?.length}<p class="notice warn"><Icon name="alert" />{t('activate.removedResign')}</p>{/if}
 
         <h3 class="sub">{t('activate.changes', { base: a.base })}</h3>
         {#if a.configDiff}
@@ -259,6 +305,9 @@
           </div>
         {:else if pushPending}
           <p class="notice warn"><Icon name="alert" />{t('activate.pushBase', { base: localBase || a.base })}</p>
+          <div class="row-end">
+            <button class="btn primary" disabled={!loaded || saving} onclick={pushBase}><Icon name="upload" size={14} />{t('activate.pushButton', { base: a.base })}</button>
+          </div>
         {:else}
           {#if dirty}<p class="notice warn"><Icon name="alert" />{t('activate.saveFirst')}</p>{/if}
           <div class="row-end">
@@ -270,7 +319,12 @@
       </section>
     {/if}
 
-    {#if error}<p class="msg err box"><Icon name="alert" size={14} />{error}</p>{/if}
+    {#if error}
+      <div class="msg err box" role="alert">
+        <Icon name="alert" size={14} />
+        <span>{error}{#if errorMore}<details class="more"><summary>{t('common.details')}</summary><code>{errorMore}</code></details>{/if}</span>
+      </div>
+    {/if}
 
     {#if proj?.active}
       <div class="row-end">
@@ -356,6 +410,19 @@
     padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+  }
+  .more {
+    margin-top: 4px;
+  }
+  .more summary {
+    cursor: pointer;
+  }
+  .more code {
+    display: block;
+    margin-top: 4px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
   }
   .chip {
     font-size: 11.5px;

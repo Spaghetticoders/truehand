@@ -1,4 +1,4 @@
-import type { ActResult, Api, ActionArgs, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, SignedIntent, TaskAction } from './types'
+import type { ActResult, Api, ActionArgs, IntentRequest, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, SignedIntent, TaskAction } from './types'
 
 export class ApiError extends Error {
   constructor(
@@ -27,6 +27,9 @@ const VIA_SHELL = [
   `PUT /api/settings`,
   `PUT /api/projects/${SEG}/config`,
   `POST /api/projects/${SEG}/commit-config`,
+  `POST /api/projects/${SEG}/push-base`,
+  `POST /api/passkeys/enroll-code`,
+  `DELETE /api/passkeys/${SEG}`,
   `POST /api/token/rotate`,
   `DELETE /api/devices/${SEG}`,
   `POST /api/projects/${SEG}/activate`,
@@ -36,10 +39,27 @@ const VIA_SHELL = [
 
 const enc = encodeURIComponent
 
+/** Signs one request with an owner passkey and returns the X-Truehand-Owner header, where the server has no Mac app. */
+export type OwnerSigner = (r: { method: string; path: string; body: string }) => Promise<string>
+
+let ownerSigner: OwnerSigner | null = null
+
+export function setOwnerSigner(f: OwnerSigner | null) {
+  ownerSigner = f
+}
+
+export const OWNER_HEADER = 'X-Truehand-Owner'
+
+/** The mock plays a headless server with this: it asks for the owner's signature the way a 409 owner-required does. */
+export function signAsOwner(r: { method: string; path: string; body: string }) {
+  if (!ownerSigner) throw new ApiError(409, 'owner passkey required', 'owner-required')
+  return ownerSigner(r)
+}
+
 export class HttpApi implements Api {
   private listeners = new Set<(e: ServerEvent) => void>()
 
-  private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async req<T>(method: string, path: string, body?: unknown, owner?: string): Promise<T> {
     const core = shell()
     const route = `${method} ${path.split('?')[0]}`
     let status: number
@@ -49,15 +69,18 @@ export class HttpApi implements Api {
       status = r.status
       data = (r.body ?? undefined) as typeof data
     } else {
-      const res = await fetch(path, {
-        method,
-        credentials: 'same-origin',
-        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      })
+      const text = body === undefined ? undefined : JSON.stringify(body)
+      const headers: Record<string, string> = {}
+      if (text !== undefined) headers['Content-Type'] = 'application/json'
+      if (owner) headers[OWNER_HEADER] = owner
+      const res = await fetch(path, { method, credentials: 'same-origin', headers, body: text })
       status = res.status
-      const text = await res.text()
-      data = text ? JSON.parse(text) : undefined
+      const reply = await res.text()
+      data = reply ? JSON.parse(reply) : undefined
+      // No Mac app on this server: the person signs this very request with an owner passkey, then it goes again.
+      if (status === 409 && data?.code === 'owner-required' && !owner && ownerSigner) {
+        return this.req<T>(method, path, body, await ownerSigner({ method, path, body: text ?? '' }))
+      }
     }
     if (status >= 400) throw new ApiError(status, data?.error ?? `HTTP ${status}`, data?.code, data)
     // Our own changes show at once, without waiting for the server's event.
@@ -99,10 +122,33 @@ export class HttpApi implements Api {
   activation = (pid: string) => this.req<Awaited<ReturnType<Api['activation']>>>('GET', `/api/projects/${enc(pid)}/activation`)
   activate = (pid: string, o: { stack?: string; base?: string; forceHooks?: boolean }) => this.req<Awaited<ReturnType<Api['activate']>>>('POST', `/api/projects/${enc(pid)}/activate`, o)
   putConfig = (pid: string, yaml: string) => this.req<Awaited<ReturnType<Api['putConfig']>>>('PUT', `/api/projects/${enc(pid)}/config`, { yaml })
-  commitConfig = (pid: string, configSha256: string) => this.req<ActResult>('POST', `/api/projects/${enc(pid)}/commit-config`, { configSha256 })
+  commitConfig = (pid: string, configSha256: string, signedIntent?: SignedIntent) =>
+    this.req<ActResult>('POST', `/api/projects/${enc(pid)}/commit-config`, signedIntent ? { configSha256, signedIntent } : { configSha256 })
+  configIntent = (pid: string, action: 'commit-config' | 'push-base', configSha256: string, approver?: string) =>
+    this.req<IntentRequest>('POST', `/api/projects/${enc(pid)}/config-intent`, { action, configSha256, approver })
+  pushBase = (pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }) =>
+    this.req<ActResult>('POST', `/api/projects/${enc(pid)}/push-base`, signedIntent ? { signedIntent } : { from: shown?.from, head: shown?.head })
+  pushPreview = (pid: string) => this.req<Awaited<ReturnType<Api['pushPreview']>>>('GET', `/api/projects/${enc(pid)}/push-base`)
+  taskIntent = (pid: string, id: string, action: TaskAction, approver: string) => this.req<IntentRequest>('POST', `${this.t(pid, id)}/intent`, { action, approver })
+
+  passkeys = () => this.req<Awaited<ReturnType<Api['passkeys']>>>('GET', '/api/passkeys')
+  passkeyCode = (owner: boolean) => this.req<Awaited<ReturnType<Api['passkeyCode']>>>('POST', '/api/passkeys/enroll-code', { owner })
+  passkeyOptions = (o: { code: string; label: string }) => this.req<Awaited<ReturnType<Api['passkeyOptions']>>>('POST', '/api/passkeys/register/options', o)
+  registerPasskey = (r: Parameters<Api['registerPasskey']>[0]) => this.req<Awaited<ReturnType<Api['registerPasskey']>>>('POST', '/api/passkeys/register', r)
+  deletePasskey = (id: string, owner?: string) => this.req<{ orphaned: string[] }>('DELETE', `/api/passkeys/${enc(id)}`, undefined, owner)
+  grantPasskey = (id: string, owner: string) => this.req<void>('POST', `/api/passkeys/${enc(id)}/grant`, undefined, owner)
+  ownerChallenge = (r: Parameters<Api['ownerChallenge']>[0]) => this.req<Awaited<ReturnType<Api['ownerChallenge']>>>('POST', '/api/owner/challenge', r)
   macKeyFingerprint = () => {
     const core = shell()
     return core ? core.invoke<string | null>('approver_key_fingerprint') : null
+  }
+  anchorPasskey = (id: string) => {
+    const core = shell()
+    return core ? core.invoke<void>('anchor_passkey', { id }) : null
+  }
+  revokeOwner = (passkeyId: string) => {
+    const core = shell()
+    return core ? core.invoke<void>('revoke_owner', { passkeyId }) : null
   }
   fetchRemote = (pid: string) => this.req<{ ok: boolean; output: string }>('POST', `/api/projects/${enc(pid)}/fetch`)
 
@@ -184,6 +230,7 @@ export class HttpApi implements Api {
       es.addEventListener('session', (e) => onEvent({ type: 'session', ...JSON.parse(data(e)) }))
       es.addEventListener('waiting', (e) => onEvent({ type: 'waiting', count: JSON.parse(data(e)).count }))
       es.addEventListener('machine', (e) => onEvent({ type: 'machine', ...JSON.parse(data(e)) }))
+      es.addEventListener('passkeys', () => onEvent({ type: 'passkeys' }))
       // The browser gives up after a 401 (not signed in yet): try again until it works.
       es.onerror = () => {
         if (es.readyState === EventSource.CLOSED && !stopped) retry = setTimeout(connect, 3000)

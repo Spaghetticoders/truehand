@@ -188,6 +188,10 @@ export interface Me {
   canApprove: boolean
   deviceName?: string
   readOnly: boolean
+  /** A server without the Mac app (Linux): human actions are signed with a passkey, never queued. */
+  headless?: boolean
+  /** This device holds a confirmed owner passkey. */
+  owner?: boolean
 }
 
 export interface QueuedAction {
@@ -288,8 +292,107 @@ export interface ActionArgs {
 
 export interface SignedIntent {
   intent: unknown
-  format: 'es256'
+  format: 'es256' | 'webauthn'
+  /** Standard base64 (DER for ES256, PKCS#1 v1.5 for RS256). */
   sig: string
+  authenticator_data?: string
+  client_data_json?: string
+}
+
+/** An approver as the 409 signature-required names it: credentialId lets this browser pick its own passkey. */
+export interface ApproverKey {
+  id: string
+  name?: string
+  credentialId?: string
+  rpId?: string
+}
+
+/** What the server asks to sign: message is standard base64 of the exact bytes. */
+export interface IntentRequest {
+  intent: Record<string, string>
+  message: string
+  rpId?: string
+  allowCredentials?: { type: 'public-key'; id: string }[]
+  title?: string
+  branch?: string
+  /** push-base: what leaves, oldest commit first. */
+  push?: PushPreview
+}
+
+export interface PushPreview {
+  from: string
+  head: string
+  commits: { sha: string; subject: string; files: string[] }[]
+  /** Every commit touches only .truehand/config.yaml. */
+  onlyConfig: boolean
+}
+
+export type PasskeyAlg = 'ES256' | 'RS256'
+
+/** internal/serve/passkeys.go passkeyView. id is the credential id, base64url. */
+export interface Passkey {
+  id: string
+  label: string
+  rpId: string
+  alg: PasskeyAlg | string
+  owner: boolean
+  /** An owner passkey counts only once confirmed (by the Mac, another owner, or the anchor). */
+  ownerValid: boolean
+  /** expired: a pending owner registered before the server restarted, which can only be registered again. */
+  pending?: 'mac' | 'owner' | 'anchor' | 'expired'
+  revoked?: 'soft' | 'durable'
+  problem?: string
+  /** Backed up to a Google or iCloud account (BS flag). */
+  synced: boolean
+  syncable: boolean
+  aaguid?: string
+  signCount: number
+  /** The paired device it was registered from (its id). */
+  device?: string
+  thisDevice: boolean
+  key: string
+  /** PEM SubjectPublicKeyInfo. */
+  publicKey: string
+  created: string
+  lastUsed?: string
+}
+
+export interface PasskeyList {
+  /** The relying party passkeys are registered for at this address: the tailscale serve host. */
+  rpId: string
+  rpIdError?: string
+  headless: boolean
+  hasOwner: boolean
+  passkeys: Passkey[]
+  /** soft: revoked from a browser, undone if someone restores the file; durable: written where only root (or the Mac's Keychain) can. */
+  revocations?: { id: string; keySha256?: string; key?: string; label?: string; revoked: 'soft' | 'durable'; time: string }[]
+  /** The root revocation list is unreadable: nobody is an owner until it is fixed. */
+  revocationsError?: string
+  revocationsCode?: 'mac-revocations-missing' | 'revoked-list-invalid'
+}
+
+export interface PasskeyOptions {
+  ceremony: string
+  owner: boolean
+  publicKey: import('../passkeys').CreationOptionsJSON
+}
+
+export interface PasskeyRegistration {
+  ceremony: string
+  attestationObject: string
+  clientDataJSON: string
+  transports?: string[]
+}
+
+export type OwnerAction = 'owner' | 'add-owner' | 'revoke-passkey'
+
+export interface OwnerChallenge {
+  intent: Record<string, string>
+  /** Standard base64 of the exact bytes, when the server sends them. */
+  message?: string
+  /** add-owner / revoke-passkey: the fingerprint of the passkey concerned. */
+  key?: string
+  publicKey: { challenge: string; rpId: string; allowCredentials: { type: 'public-key'; id: string }[]; userVerification?: string; timeout?: number }
 }
 
 export interface ActResult {
@@ -309,6 +412,7 @@ export type ServerEvent =
   | { type: 'session'; id: string; status: SessionStatus; waitingFor?: Session['waitingFor'] }
   | { type: 'waiting'; count: number }
   | { type: 'machine'; id: string; status: MachineStatus }
+  | { type: 'passkeys' }
 
 export interface PtyHandlers {
   onHello?: (h: { cols: number; rows: number; status: SessionStatus; waitingFor?: string }) => void
@@ -347,10 +451,34 @@ export interface Api {
   activate(pid: string, o: { stack?: string; base?: string; forceHooks?: boolean }): Promise<Activation>
   /** From a phone the change is queued for the Mac. */
   putConfig(pid: string, yaml: string): Promise<Activation | { queued: true; queuedId?: string }>
-  /** Commits the config with that hash on the base branch (Touch ID on the Mac, queued from a phone). */
-  commitConfig(pid: string, configSha256: string): Promise<ActResult>
+  /** Commits the config with that hash on the base branch (Touch ID on the Mac, a passkey elsewhere, or queued). */
+  commitConfig(pid: string, configSha256: string, signedIntent?: SignedIntent): Promise<ActResult>
+  /** The intent to sign for committing or pushing the config on the base branch. */
+  configIntent(pid: string, action: 'commit-config' | 'push-base', configSha256: string, approver?: string): Promise<IntentRequest>
+  /** Without a signature, from and head are the preview's: the person's confirmation is for that push only. */
+  pushBase(pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }): Promise<ActResult>
+  /** What push-base would push now, and who may sign it. */
+  pushPreview(pid: string): Promise<{ push?: PushPreview; approvers?: string[]; approverKeys?: ApproverKey[] }>
+  /** The intent to sign for an action on a task, for a passkey outside the Mac app. */
+  taskIntent(pid: string, id: string, action: TaskAction, approver: string): Promise<IntentRequest>
+
+  passkeys(): Promise<PasskeyList>
+  /** A one-time code to register a passkey (an owner one if asked): a human act. */
+  passkeyCode(owner: boolean): Promise<{ code: string; expires: string; owner: boolean }>
+  passkeyOptions(o: { code: string; label: string }): Promise<PasskeyOptions>
+  registerPasskey(r: PasskeyRegistration): Promise<Passkey>
+  /** owner: the X-Truehand-Owner header of a revoke-passkey signed by another owner. */
+  deletePasskey(id: string, owner?: string): Promise<{ orphaned: string[] }>
+  /** Confirms a waiting owner passkey with another owner's add-owner signature. */
+  grantPasskey(id: string, owner: string): Promise<void>
+  /** A server intent for an owner passkey: one request (owner), or granting or revoking a passkey. */
+  ownerChallenge(r: { credential: string; action: OwnerAction; method?: string; path?: string; bodySha256?: string; passkey?: string }): Promise<OwnerChallenge>
   /** This Mac's approver key fingerprint, null without a key, or null outside the Mac app. */
   macKeyFingerprint(): Promise<string | null> | null
+  /** The Mac app confirms a waiting owner passkey with Touch ID; null outside it. */
+  anchorPasskey(id: string): Promise<void> | null
+  /** The Mac app revokes an owner passkey for good (Touch ID, Keychain); null outside it. */
+  revokeOwner(passkeyId: string): Promise<void> | null
   fetchRemote(pid: string): Promise<{ ok: boolean; output: string }>
 
   task(pid: string, id: string, branch?: string): Promise<TaskDetail>

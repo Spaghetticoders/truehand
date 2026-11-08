@@ -1,6 +1,6 @@
 <script lang="ts">
-  import qrcode from 'qrcode-generator'
   import Icon from '../components/Icon.svelte'
+  import Qr from '../components/Qr.svelte'
   import { api, ApiError } from '../api'
   import { t } from '../i18n/index.svelte'
   import { app, refresh } from '../stores/app.svelte'
@@ -16,20 +16,10 @@
   let error = $state<string | null>(null)
   let busy = $state(false)
 
-  const generator = $derived(app.data?.me.canApprove ?? false)
+  const generator = $derived(!!app.data?.me.canApprove || !!app.data?.me.headless)
   const left = $derived(pairing ? Math.max(0, Math.floor((pairing.expires - now) / 1000)) : 0)
   const base = $derived(app.data?.settings.remote.address || location.origin)
   const link = $derived(pairing ? `${base}/#/pair?code=${pairing.code}` : '')
-  const matrix = $derived.by(() => {
-    if (!link) return null
-    const q = qrcode(0, 'M')
-    q.addData(link)
-    q.make()
-    const n = q.getModuleCount()
-    const cells: [number, number][] = []
-    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) cells.push([c, r])
-    return { n, cells }
-  })
 
   $effect(() => {
     if (initial) code = initial
@@ -97,12 +87,7 @@
       </ol>
       {#if pairing && left > 0}
         <div class="code-area">
-          {#if matrix}
-            <svg class="qr" viewBox="-2 -2 {matrix.n + 4} {matrix.n + 4}" role="img" aria-label={t('pair.qrAlt')} shape-rendering="crispEdges">
-              <rect x="-2" y="-2" width={matrix.n + 4} height={matrix.n + 4} class="qr-bg" />
-              {#each matrix.cells as [x, y] (`${x}-${y}`)}<rect {x} {y} width="1" height="1" />{/each}
-            </svg>
-          {/if}
+          <Qr text={link} label={t('pair.qrAlt')} />
           <div class="code-col">
             <span class="k">{t('pair.code')}</span>
             <span class="code mono" aria-live="polite">{pairing.code.replace(/^(.{4})(.{4})$/, '$1-$2')}</span>
@@ -152,6 +137,7 @@
         <button class="btn" type="submit" disabled={!token.trim()}>{t('pair.login')}</button>
       </form>
     </details>
+    <p class="muted small enroll-link"><Icon name="lock" size={14} /><a href={href({ name: 'enroll' })}>{t('enroll.fromPair')}</a></p>
   {/if}
   {#if error}<p class="err"><Icon name="alert" size={14} />{error}</p>{/if}
 </div>
@@ -201,15 +187,6 @@
     align-items: center;
     flex-wrap: wrap;
   }
-  .qr {
-    width: 196px;
-    height: 196px;
-    fill: var(--qr-fg);
-    border-radius: var(--radius-sm);
-  }
-  .qr-bg {
-    fill: var(--qr-bg);
-  }
   .code-col {
     display: grid;
     gap: 6px;
@@ -246,6 +223,16 @@
     display: grid;
     gap: 10px;
     margin-top: 10px;
+  }
+  .enroll-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .enroll-link a {
+    color: var(--text-2);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   .err {
     display: flex;

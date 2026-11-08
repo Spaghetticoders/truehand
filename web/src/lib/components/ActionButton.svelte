@@ -2,7 +2,7 @@
   import Icon, { type IconName } from './Icon.svelte'
   import type { TaskAction, TaskSummary } from '../api'
   import { t, type Key } from '../i18n/index.svelte'
-  import { app, isOffline, NEEDS_HUMAN, queuedFor } from '../stores/app.svelte'
+  import { app, isOffline, NEEDS_HUMAN, passkeySigner, queuedFor } from '../stores/app.svelte'
   import { busy, confirmQueued, runAction } from '../stores/actions.svelte'
 
   let { task, size = 'md', hide = [] }: { task: TaskSummary; size?: 'sm' | 'md'; hide?: TaskAction[] } = $props()
@@ -10,6 +10,7 @@
   const action = $derived(task.primaryAction)
   const queued = $derived(queuedFor(task.projectId, task.id)[0])
   const canApprove = $derived(app.data?.me.canApprove ?? false)
+  const signs = $derived(canApprove || (!!app.data && passkeySigner()))
   const human = $derived(!!action && NEEDS_HUMAN.includes(action))
   const offline = $derived(isOffline(task.projectId))
   const readOnly = $derived(app.data?.me.readOnly ?? false)
@@ -18,7 +19,7 @@
   const label = $derived.by((): Key => {
     if (!action) return 'action.start-agent'
     if (action === 'open-agent' && (task.waitReason === 'question' || task.waitReason === 'permission')) return 'action.answer-agent'
-    if (human && !canApprove) return `actionRemote.${action as 'approve-plan' | 'push' | 'open-pr'}`
+    if (human && !signs) return `actionRemote.${action as 'approve-plan' | 'push' | 'open-pr'}`
     return `action.${action}`
   })
 
@@ -51,7 +52,7 @@
     class:primary={size === 'md' && !QUIET.includes(action)}
     disabled={loading || offline || readOnly}
     aria-busy={loading}
-    title={readOnly ? t('app.readOnly') : offline ? t('machine.offlineHint') : human && !canApprove ? t('action.remoteHint') : undefined}
+    title={readOnly ? t('app.readOnly') : offline ? t('machine.offlineHint') : human && !signs ? t('action.remoteHint') : undefined}
     onclick={(e) => {
       e.preventDefault()
       e.stopPropagation()

@@ -11,7 +11,9 @@ export type Key = Leaves<typeof it>
 
 const dictionaries: Record<Locale, unknown> = { it, en: en satisfies typeof it }
 
-export const i18n = $state({ locale: 'it' as Locale })
+// Before the server's setting is known (a new phone, not signed in yet), follow the browser.
+export const i18n = $state({ locale: (navigator.language?.toLowerCase().startsWith('it') ? 'it' : 'en') as Locale })
+document.documentElement.lang = i18n.locale
 
 function lookup(dict: unknown, key: string): string | undefined {
   let node: unknown = dict

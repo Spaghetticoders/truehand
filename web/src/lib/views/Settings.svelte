@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte'
   import Modal from '../components/Modal.svelte'
+  import PasskeysCard from './PasskeysCard.svelte'
   import { api, PERMISSION_MODES, type Device, type Machine, type PermissionMode, type RemoteMode, type Settings, type SettingsPatch } from '../api'
   import { t, timeAgo, type Key } from '../i18n/index.svelte'
   import { app, applyTheme, clientName, saveSettings, theme, type Theme } from '../stores/app.svelte'
@@ -9,7 +10,9 @@
   import { ui } from '../stores/ui.svelte'
 
   const s = $derived(app.data?.settings)
-  const mac = $derived(app.data?.me.canApprove ?? false)
+  // The Mac app, or an owner's passkey on a server without it.
+  const mac = $derived(!!app.data?.me.canApprove || !!app.data?.me.headless)
+  const headless = $derived(!!app.data?.me.headless)
   const machines = $derived(app.data?.machines ?? [])
   let devices = $state<Device[]>([])
   let removing = $state<string | null>(null)
@@ -145,7 +148,7 @@
           <button role="radio" aria-checked={remoteMode === m} disabled={!mac} onclick={() => setRemote(m)}>{t(`remote.${m}`)}</button>
         {/each}
       </div>
-      <p class="muted small">{t(`remote.${remoteMode}Hint`)}{#if !mac}{' '}{t('settings.macOnly')}{/if}</p>
+      <p class="muted small">{headless ? t('remote.headlessHint') : t(`remote.${remoteMode}Hint`)}{#if !mac}{' '}{t('settings.macOnly')}{/if}</p>
       {#if remoteMode === 'tailnet' && mac}
         <form class="addr" onsubmit={(e) => (e.preventDefault(), save({ remote: { enabled: true, mode: 'tailnet', address: address.trim() } }))}>
           <label class="field">
@@ -188,10 +191,12 @@
       {:else}
         <p class="muted small">{t('settings.noDevices')}</p>
       {/if}
-      {#if mac}
+      {#if mac && !headless}
         <div><button class="btn sm ghost" onclick={() => (rotate = true)}><Icon name="refresh" size={14} />{t('settings.rotate')}</button></div>
       {/if}
     </section>
+
+    <PasskeysCard />
 
     <section class="card block">
       <div class="label between">

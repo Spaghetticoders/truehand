@@ -8,6 +8,8 @@
   import Settings from './lib/views/Settings.svelte'
   import Activate from './lib/views/Activate.svelte'
   import Pair from './lib/views/Pair.svelte'
+  import Enroll from './lib/views/Enroll.svelte'
+  import SignSheet from './lib/components/SignSheet.svelte'
   import Toasts from './lib/components/Toasts.svelte'
   import NewTaskModal from './lib/views/NewTaskModal.svelte'
   import SendBackModal from './lib/views/SendBackModal.svelte'
@@ -40,7 +42,9 @@
             ? t('action.activate')
             : route.name === 'pair'
               ? t('settings.pairPhone')
-              : t('nav.board'),
+              : route.name === 'enroll'
+                ? t('enroll.title')
+                : t('nav.board'),
   )
 
   $effect(() => {
@@ -52,7 +56,7 @@
 
 <a class="skip" href="#main">{t('app.skip')}</a>
 {#if app.needsAuth}
-  <main id="main" class="bare"><Pair /></main>
+  <main id="main" class="bare">{#if route.name === 'enroll'}<Enroll code={route.code} />{:else}<Pair />{/if}</main>
 {:else}
 <div class="shell">
   <aside class="side" class:open={ui.drawer}>
@@ -90,6 +94,8 @@
         {#key route.project}<Activate projectId={route.project} />{/key}
       {:else if route.name === 'pair'}
         <Pair code={route.code} />
+      {:else if route.name === 'enroll'}
+        <Enroll code={route.code} />
       {:else}
         <Board />
       {/if}
@@ -101,6 +107,7 @@
 <AddProjectModal />
 <SendBackModal />
 {/if}
+<SignSheet />
 <Toasts />
 
 <style>

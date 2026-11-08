@@ -9,7 +9,7 @@
   import Modal from '../components/Modal.svelte'
   import { api, ApiError, TASK_STATES, type FilePatch, type TaskDetail } from '../api'
   import { t, timeAgo, type Key } from '../i18n/index.svelte'
-  import { app, clientName, crashed, dotOf, isLive, isOffline, isRemote, machineOf, NEEDS_HUMAN, project, queuedFor, statusKey, taskOf } from '../stores/app.svelte'
+  import { app, clientName, crashed, dotOf, isLive, isOffline, isRemote, machineOf, NEEDS_HUMAN, passkeySigner, project, queuedFor, statusKey, taskOf } from '../stores/app.svelte'
   import { discardQueued, errorText, toast } from '../stores/actions.svelte'
   import { href, TASK_TABS, type TaskTab } from '../stores/router.svelte'
   import { ui } from '../stores/ui.svelte'
@@ -198,7 +198,7 @@
       </div>
       {#if summary.primaryAction && NEEDS_HUMAN.includes(summary.primaryAction) && !queued}
         {#if !canApprove}
-          <p class="phone-hint"><Icon name="shield" size={13} />{t('action.remoteHint')}</p>
+          <p class="phone-hint"><Icon name={passkeySigner() ? 'lock' : 'shield'} size={13} />{t(passkeySigner() ? 'passkey.actionHint' : 'action.remoteHint')}</p>
         {/if}
       {/if}
       <Stepper state={detail.state} merged={detail.merged} />

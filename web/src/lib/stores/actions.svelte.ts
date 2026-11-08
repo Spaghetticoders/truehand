@@ -3,6 +3,8 @@ import { t } from '../i18n/index.svelte'
 import { app, noteQueued, sessionsOf, isLive } from './app.svelte'
 import { go } from './router.svelte'
 import { ui } from './ui.svelte'
+import { approverKeys, passkeyHere, signTask } from './sign.svelte'
+import { PasskeyError } from '../passkeys'
 
 export interface Toast {
   id: number
@@ -20,21 +22,35 @@ export function toast(kind: Toast['kind'], text: string, href?: string) {
   setTimeout(() => (toasts.list = toasts.list.filter((x) => x.id !== id)), kind === 'ok' ? 4500 : 8000)
 }
 
-const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled'] as const
+const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled', 'base-moved', 'not-only-config', 'base-diverged', 'base-unknown', 'base-behind', 'config-invalid', 'push-base-refused', 'nothing-to-push', 'base-not-remote', 'signature-refused'] as const
+
+/** The server's technical reason behind a translated message, for a collapsed detail. */
+export function errorDetail(e: unknown): string | null {
+  return e instanceof ApiError && e.code && (CODED as readonly string[]).includes(e.code) ? e.message : null
+}
 
 export function errorText(e: unknown): string {
+  if (e instanceof PasskeyError) return t(`passkey.err.${e.code}`, { detail: e.message })
   if (e instanceof ApiError) {
+    if (e.code === 'owner-required') return t('passkey.ownerRequired')
+    if (/confirmed through this one/.test(e.message)) return t('passkey.dependsOn')
+    if (/revoke this passkey from another owner/.test(e.message)) return t('passkey.revokeSelf')
     const code = e.code as (typeof CODED)[number] | undefined
     if (code && CODED.includes(code)) return t(`err.${code}`)
     if (e.code === 'remote-approval-unavailable') return t('action.remoteUnavailable')
     if (e.code === 'machine-offline' || e.code === 'machine-unreachable') return t('machine.unreachable', { error: e.message })
     if (e.code === 'signature-required') return t('action.signatureRequired')
     if (e.code === 'remote-unavailable') return t('err.remote-unavailable', { error: e.message.replace(/^saved, but remote access could not start: /, '') })
-    if (e.code === 'config-invalid') return t('err.config-invalid', { error: e.message })
     if (e.code === 'not-on-base') return t('err.not-on-base', { base: /check out (\S+) first/.exec(e.message)?.[1] ?? '' })
     const gh = (e.body as { reason?: string } | undefined)?.reason ?? /^gh pr create failed(?: on the Mac)?: (.*)$/s.exec(e.message)?.[1]
     if (e.code === 'gh-failed' || gh !== undefined) return ghText(gh ?? e.message)
-    if (e.status === 403) return t('action.forbidden', { error: e.message })
+    if (e.status === 403) {
+      // The server's reason is technical English: keep it for whoever debugs, say it plainly here.
+      console.warn('truehand:', e.message)
+      if (/^signed intent refused/.test(e.message)) return t('err.signedRefused')
+      if (/^passkey refused/.test(e.message)) return t('err.passkeyRefused')
+      return t('action.forbiddenPlain')
+    }
     return e.message
   }
   if (typeof e === 'string' && /cancel/i.test(e)) return t('action.signCancelled')
@@ -43,19 +59,20 @@ export function errorText(e: unknown): string {
 
 const ghText = (reason: string) => (/gh auth login|not logged in|authentication/i.test(reason) ? t('err.gh-auth') : t('err.gh-failed', { reason }))
 
-/** Runs a human-factor action; if the repo wants a signature, asks the Mac app for it and retries once. */
+/** Runs a human-factor action; if the repo wants a signature, gets it (Mac app or passkey) and retries once. */
 async function withSignature(pid: string, id: string, action: TaskAction, args: ActionArgs) {
   try {
     return checked(await api.act(pid, id, action, args))
   } catch (e) {
-    const signedIntent = await signFor(e, pid, id, action)
+    const signedIntent = await signFor(e, pid, id, action, args.planSha256)
     return checked(await api.act(pid, id, action, { ...args, signedIntent }))
   }
 }
 
-/** On a 409 signature-required, gets the Mac app's Touch ID signature; rethrows anything else. */
-async function signFor(e: unknown, pid: string, id: string, action: TaskAction) {
+/** On a 409 signature-required, gets the Mac app's Touch ID signature, or this browser's passkey; rethrows anything else. */
+async function signFor(e: unknown, pid: string, id: string, action: TaskAction, planSha256?: string) {
   if (!(e instanceof ApiError && e.code === 'signature-required')) throw e
+  if (passkeyHere()) return signTask(pid, id, action, approverKeys(e.body), planSha256)
   const approvers = (e.body as { approvers?: string[] } | undefined)?.approvers ?? []
   // With one approver the id is known; with several the shell signs with its own key.
   const signing = api.signIntent(pid, id, action, approvers.length === 1 ? approvers[0] : undefined)
@@ -125,7 +142,7 @@ export async function confirmQueued(qid: string) {
     } catch (e) {
       const q = app.data?.queued.find((x) => x.id === qid)
       if (!q || q.kind === 'config' || q.kind === 'commit-config') throw e
-      r = checked(await api.confirmQueued(qid, await signFor(e, q.projectId, q.taskId, QUEUED_ACTION[q.kind])))
+      r = checked(await api.confirmQueued(qid, await signFor(e, q.projectId, q.taskId, QUEUED_ACTION[q.kind], q.planSha256)))
     }
     toast('ok', t('action.confirmed'), r.url)
   } catch (e) {
