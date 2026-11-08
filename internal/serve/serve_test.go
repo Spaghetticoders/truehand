@@ -1343,7 +1343,7 @@ func TestCommitConfigShowsWhoBecomesApprover(t *testing.T) {
 	e.s.Run = runCmd
 	_, pub := newKey(t)
 	indented := "      " + strings.ReplaceAll(strings.TrimSpace(pub), "\n", "\n      ")
-	cfg := "version: 0\nbase: main\napprovers:\n  - id: mac\n    name: Emanuel\n    public_key: |\n" + indented + "\ngates:\n  approved:\n    - check: plan_valid\n    - check: human_approval\n"
+	cfg := "version: 0\nbase: main\napprovers:\n  - id: mac\n    name: Alice\n    public_key: |\n" + indented + "\ngates:\n  approved:\n    - check: plan_valid\n    - check: human_approval\n"
 	os.WriteFile(filepath.Join(e.root, ".truehand/config.yaml"), []byte(cfg), 0o644)
 	var a activationView
 	e.json("GET", "/api/projects/"+e.pid+"/activation", "", asToken, &a)
@@ -1357,30 +1357,24 @@ func TestCommitConfigShowsWhoBecomesApprover(t *testing.T) {
 	if fp != keyFingerprint(pub) {
 		t.Fatal("activation's key fingerprint")
 	}
-	if last := e.auths[len(e.auths)-1]; !strings.Contains(last, "1 approver(s): mac (\"Emanuel\", key "+fp+")") || !strings.Contains(last, "Adds approver(s) mac (\"Emanuel\", key "+fp+")") || !strings.Contains(last, "(sha "+a.ConfigSHA256[:12]+")") || len(fp) != 12 {
+	if last := e.auths[len(e.auths)-1]; !strings.Contains(last, "1 approver(s): mac (\"Alice\", key "+fp+")") || !strings.Contains(last, "Adds approver(s) mac (\"Alice\", key "+fp+")") || !strings.Contains(last, "(sha "+a.ConfigSHA256[:12]+")") || len(fp) != 12 {
 		t.Fatalf("the dialog must say who becomes an approver, with the key: %q", last)
 	}
-	// A name with a line break must not write its own lines into the dialog, and removing
-	// an approver is said too.
+	// Now the base lists mac: the next config is mac's to sign, Touch ID alone is not enough
+	// (D3), and nothing is asked of the OS.
 	_, otherPub := newKey(t)
-	spoof := strings.Replace(cfg, "id: mac\n    name: Emanuel", "id: mac2\n    name: \"Emanuel\\nNo approvers.\"", 1)
-	spoof = strings.Replace(spoof, indented, "      "+strings.ReplaceAll(strings.TrimSpace(otherPub), "\n", "\n      "), 1)
+	spoof := strings.Replace(cfg, indented, "      "+strings.ReplaceAll(strings.TrimSpace(otherPub), "\n", "\n      "), 1)
 	os.WriteFile(filepath.Join(e.root, ".truehand/config.yaml"), []byte(spoof), 0o644)
 	var b activationView
 	e.json("GET", "/api/projects/"+e.pid+"/activation", "", asToken, &b)
-	// The Mac app says which key is its own: the "Emanuel" added with another key is foreign.
+	auths := e.authCount()
 	body, _ := json.Marshal(map[string]string{"configSha256": b.ConfigSHA256, "thisMacKey": pub})
-	if code := e.code("POST", "/api/projects/"+e.pid+"/commit-config", string(body), asShell); code != 200 {
-		t.Fatalf("commit: %d", code)
+	resp, out := e.req("POST", "/api/projects/"+e.pid+"/commit-config", string(body), asShell)
+	if resp.StatusCode != 409 || !strings.Contains(string(out), codeSignatureRequired) || !strings.Contains(string(out), `"approvers":["mac"]`) || e.authCount() != auths {
+		t.Fatalf("commit over listed approvers with Touch ID only: %d %s", resp.StatusCode, out)
 	}
-	last := e.auths[len(e.auths)-1]
-	if strings.Contains(last, "\n") || !strings.Contains(last, "Adds approver(s) mac2 (\"Emanuel No approvers.\", key ") || !strings.Contains(last, ", foreign key)") || !strings.Contains(last, "Removes approver(s) mac (\"Emanuel\", key "+fp+", this Mac)") {
-		t.Fatalf("spoofed name: %q", last)
-	}
-	var after activationView
-	e.json("GET", "/api/projects/"+e.pid+"/activation", "", asToken, &after)
-	if len(after.ApproversAdded) != 0 || after.ConfigDiff != "" || len(after.Approvers) != 1 {
-		t.Fatalf("after the commit nothing differs from the base: %q %+v", after.ConfigDiff, after.ApproversAdded)
+	if got := git(t, e.root, "log", "-1", "-p", "--", ".truehand/config.yaml"); strings.Contains(got, strings.Split(strings.TrimSpace(otherPub), "\n")[1]) {
+		t.Fatal("the key swap was committed")
 	}
 }
 

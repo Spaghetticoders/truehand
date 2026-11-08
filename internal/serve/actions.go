@@ -215,7 +215,7 @@ func (s *Server) confirmed(w http.ResponseWriter, r *http.Request, l *located, a
 		return s.verifyPushIntent(w, l, action, sg)
 	}
 	if len(l.approvers()) > 0 {
-		signatureRequired(w, l)
+		s.signatureRequired(w, l)
 		return false
 	}
 	return s.human(w, r, reason, q)
@@ -227,7 +227,7 @@ func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, l *located,
 		return
 	}
 	if len(l.approvers()) > 0 {
-		signatureRequired(w, l)
+		s.signatureRequired(w, l)
 		return
 	}
 	sha := args.PlanSHA256
@@ -423,7 +423,7 @@ func (s *Server) confirmQueued(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case len(l.approvers()) > 0:
-		signatureRequired(w, l)
+		s.signatureRequired(w, l)
 		return
 	case !s.human(w, r, reason, nil):
 		return

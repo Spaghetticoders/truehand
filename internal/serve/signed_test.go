@@ -32,7 +32,7 @@ func newKey(t *testing.T) (*ecdsa.PrivateKey, string) {
 // withApprovers commits approvers (the Mac's key) to the base branch of root.
 func withApprovers(t *testing.T, root, pub string) {
 	indented := "      " + strings.ReplaceAll(strings.TrimSpace(pub), "\n", "\n      ")
-	cfg := "version: 0\nbase: main\napprovers:\n  - id: mac\n    name: Emanuel\n    public_key: |\n" + indented + "\ngates:\n  approved:\n    - check: plan_valid\n    - check: human_approval\n"
+	cfg := "version: 0\nbase: main\napprovers:\n  - id: mac\n    name: Alice\n    public_key: |\n" + indented + "\ngates:\n  approved:\n    - check: plan_valid\n    - check: human_approval\n"
 	os.WriteFile(filepath.Join(root, ".truehand/config.yaml"), []byte(cfg), 0o644)
 	git(t, root, "add", ".truehand/config.yaml")
 	git(t, root, "commit", "-q", "-m", "chore: approvers")

@@ -18,6 +18,12 @@ func (s *Server) needAgents(w http.ResponseWriter) bool {
 		httpError(w, http.StatusServiceUnavailable, "agent sessions are unavailable: Claude Code (claude) was not found when the server started")
 		return false
 	}
+	// Headless, agents start only once a person holds the server: until then whoever has
+	// the network could set them to work.
+	if s.Headless && !s.HasOwner() {
+		ownerRequired(w)
+		return false
+	}
 	return true
 }
 

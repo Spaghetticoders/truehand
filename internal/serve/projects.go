@@ -3,9 +3,6 @@ package serve
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -333,18 +331,7 @@ type approverID struct {
 	Key string `json:"key"`
 }
 
-func keyFingerprint(pemKey string) string {
-	pub, err := sign.ParsePublicKey(pemKey)
-	if err != nil {
-		return "invalid"
-	}
-	der, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		return "invalid"
-	}
-	h := sha256.Sum256(der)
-	return hex.EncodeToString(h[:])[:12]
-}
+func keyFingerprint(pemKey string) string { return appstate.KeyFingerprint(pemKey) }
 
 // promptText makes text from a config safe to show in the OS dialog: one line, no control
 // characters, at most 40 characters.
@@ -563,7 +550,20 @@ func (s *Server) writeConfig(w http.ResponseWriter, p appstate.Project, repo *gi
 
 // gitEnv never lets git stop to ask for credentials: nobody would see the prompt.
 func gitEnv(pathPrefix string) []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1")
+	// As gitx: no replace refs or grafts, which could make git see other history, and no
+	// hint about grafts in the errors people read. Config passed in the environment is
+	// kept: ours is added after it.
+	env := os.Environ()
+	n := 0
+	for i, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GIT_CONFIG_COUNT="); ok {
+			n, _ = strconv.Atoi(v)
+			env = append(env[:i:i], env[i+1:]...)
+			break
+		}
+	}
+	env = append(env, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE=/dev/null",
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+1), fmt.Sprintf("GIT_CONFIG_KEY_%d=advice.graftFileDeprecated", n), fmt.Sprintf("GIT_CONFIG_VALUE_%d=false", n))
 	if pathPrefix != "" {
 		for i, kv := range env {
 			if strings.HasPrefix(kv, "PATH=") {
@@ -629,8 +629,9 @@ func (s *Server) commitConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ConfigSHA256 string `json:"configSha256"`
-		ThisMacKey   string `json:"thisMacKey"`
+		ConfigSHA256 string       `json:"configSha256"`
+		ThisMacKey   string       `json:"thisMacKey"`
+		SignedIntent *sign.Signed `json:"signedIntent"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -646,6 +647,18 @@ func (s *Server) commitConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := commitConfigCheck(ws); err != nil {
 		writeJSONStatus(w, http.StatusConflict, err)
+		return
+	}
+	// Who approves is decided by one who already approves: once the base lists approvers,
+	// only their signature commits a config (D3); before, a human confirmation enrols them.
+	if ids := committedApproverIDs(repo, revParse(repo, "HEAD")); len(ids) > 0 || body.SignedIntent != nil {
+		if body.SignedIntent == nil {
+			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "the base lists approvers: one of them signs the new config", "code": codeSignatureRequired, "approvers": ids, "approverKeys": s.approverKeys(committedApprovers(repo, revParse(repo, "HEAD")))})
+			return
+		}
+		if s.commitConfigSigned(w, ws, body.ConfigSHA256, body.SignedIntent) {
+			s.writeCommitConfig(w, p, repo, body.ConfigSHA256)
+		}
 		return
 	}
 	shown, _ := shownConfig(ws, body.ConfigSHA256)

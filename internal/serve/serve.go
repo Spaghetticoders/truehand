@@ -67,13 +67,30 @@ type Server struct {
 	// Peer is set on `serve --peer`: a remote machine's server, reached by the Mac through
 	// its unix socket only.
 	Peer bool
+	// Headless is a server without the Mac app (Linux): the only human factor is an owner's
+	// passkey, nothing waits in a queue and no OS dialog is ever shown.
+	Headless bool
+	// ReadAnchor reads the root-owned anchor of the first owner, ReadRevoked the root-owned
+	// revocations; tests replace them.
+	ReadAnchor  func() (*appstate.Anchor, error)
+	ReadRevoked func() ([]appstate.Revocation, error)
 
 	mu       sync.Mutex
 	clients  map[chan sseEvent]bool
 	pairs    map[string]time.Time // sha256 of pending pairing codes → expiry
 	pairFail []time.Time
-	prs      map[string]prState // branch → last known PR, for the waiting list
-	health   *healthCache
+
+	enrolls     map[string]enrollCode // sha256 of enrolment codes
+	ceremonies  map[string]ceremony
+	ownerNonces map[string]ownerNonce
+	anchorCodes map[string]bool       // anchor codes already spent by this process
+	macRevoked  []appstate.Revocation // nil until the Mac app sent its list
+	registered  map[string]registeredKey
+	// Wrong enrolment codes in the last minute, per source and in all.
+	enrollFail    map[string][]time.Time
+	enrollFailAll []time.Time
+	prs           map[string]prState // branch → last known PR, for the waiting list
+	health        *healthCache
 
 	waitingDirty atomic.Bool
 	// sessionsMu makes "is the checkout free?" and starting a session one step.
@@ -114,6 +131,12 @@ func (s *Server) defaults() {
 	if s.Home == "" {
 		s.Home, _ = os.UserHomeDir()
 	}
+	s.mu.Lock()
+	if s.enrolls == nil {
+		s.enrolls, s.ceremonies, s.ownerNonces, s.anchorCodes = map[string]enrollCode{}, map[string]ceremony{}, map[string]ownerNonce{}, map[string]bool{}
+		s.registered, s.enrollFail = map[string]registeredKey{}, map[string][]time.Time{}
+	}
+	s.mu.Unlock()
 }
 
 func runCmd(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
@@ -144,7 +167,17 @@ func (s *Server) routes() *http.ServeMux {
 	h("POST /api/shutdown", s.shutdown)
 	h("POST /api/shell/challenge", s.shellChallenge)
 	h("POST /api/shell/key", s.shellKey)
+	h("POST /api/shell/revoked", s.shellRevoked)
 	h("GET /api/version", s.version)
+	h("POST /api/passkeys/enroll-code", s.enrollCodeNew)
+	h("POST /api/passkeys/register/options", s.registerOptions)
+	h("POST /api/passkeys/register", s.register)
+	h("GET /api/passkeys", s.passkeys)
+	h("DELETE /api/passkeys/{id}", s.deletePasskey)
+	h("POST /api/passkeys/{id}/grant", s.grantPasskey)
+	h("GET /api/passkeys/{id}/anchor-intent", s.anchorIntent)
+	h("POST /api/passkeys/{id}/anchor", s.anchorPasskey)
+	h("POST /api/owner/challenge", s.ownerChallenge)
 	h("GET /api/settings", s.getSettings)
 	h("PUT /api/settings", s.putSettings)
 
@@ -158,6 +191,9 @@ func (s *Server) routes() *http.ServeMux {
 	h("PUT /api/projects/{pid}/config", s.putConfig)
 	h("POST /api/projects/{pid}/fetch", s.fetch)
 	h("POST /api/projects/{pid}/commit-config", s.commitConfig)
+	h("POST /api/projects/{pid}/config-intent", s.configIntent)
+	h("POST /api/projects/{pid}/push-base", s.pushBase)
+	h("GET /api/projects/{pid}/push-base", s.pushBasePreview)
 	h("POST /api/projects/{pid}/sessions", s.startFreeSession)
 
 	h("POST /api/projects/{pid}/tasks", s.newTask)
@@ -211,6 +247,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			httpError(w, http.StatusForbidden, "unexpected Host header")
 			return
 		}
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -226,6 +263,12 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") && !(r.Method == http.MethodPost && (r.URL.Path == "/api/pair" || r.URL.Path == "/api/shell/challenge")) {
 			id, ok := s.authenticate(r)
+			// A new phone registers its passkey with an enrolment code before it has a cookie.
+			if !ok && r.Method == http.MethodPost && (r.URL.Path == "/api/passkeys/register/options" || r.URL.Path == "/api/passkeys/register") {
+				r = r.WithContext(context.WithValue(r.Context(), identityKey{}, identity{proof: &humanProof{}}))
+				next.ServeHTTP(w, r)
+				return
+			}
 			if !ok {
 				httpError(w, http.StatusUnauthorized, "not signed in: open the Truehand app, or pair this device")
 				return
@@ -235,6 +278,15 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			if id.Via == viaDevice && (isUnsafe(r.Method) || ws) && r.Header.Get("Origin") == "" {
 				httpError(w, http.StatusForbidden, "missing Origin")
 				return
+			}
+			id.proof = &humanProof{}
+			if r.Header.Get(ownerHeader) != "" && isUnsafe(r.Method) {
+				h, err := bodyHash(r)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				id.proof.bodySHA256 = h
 			}
 			r = r.WithContext(context.WithValue(r.Context(), identityKey{}, id))
 		}

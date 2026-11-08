@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/http"
 	"regexp"
@@ -38,6 +39,14 @@ type identity struct {
 	Shell bool
 	// ViewOnly may watch a terminal but not type into it.
 	ViewOnly bool
+	proof    *humanProof
+}
+
+// humanProof is filled by human() when an owner's passkey confirmed the request.
+type humanProof struct {
+	bodySHA256 string
+	owner      string // the passkey's id
+	label      string
 }
 
 func identityOf(r *http.Request) identity {
@@ -335,7 +344,7 @@ func (s *Server) shellKey(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	pub, err := sign.ParsePublicKey(body.PublicKey)
+	pub, err := sign.ParseP256PublicKey(body.PublicKey)
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
@@ -362,8 +371,30 @@ func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
 // secret, and then the OS authenticates the user. Without the secret, a request that can
 // wait (q set) is queued for the Mac (202) and anything else is refused; the OS dialog is
 // never shown for it.
+//
+// An owner's passkey (ownerHeader, signed for this method, path and body) stands for the
+// person anywhere; on a headless server it is the only way, and nothing is queued.
 func (s *Server) human(w http.ResponseWriter, r *http.Request, reason string, q *appstate.QueuedAction) bool {
 	id := identityOf(r)
+	if sg, err := ownerAssertion(r); err != nil || sg != nil {
+		if err == nil && id.proof == nil {
+			err = errors.New("no owner assertion on this channel")
+		}
+		var p *appstate.Passkey
+		if err == nil {
+			p, err = s.verifyOwner(r, sg, appstate.ActionOwner, humanSubject(r.Method, requestPath(r), id.proof.bodySHA256))
+		}
+		if err != nil {
+			httpError(w, http.StatusForbidden, "passkey refused: "+err.Error())
+			return false
+		}
+		id.proof.owner, id.proof.label = p.ID, p.Label
+		return true
+	}
+	if s.Headless && id.Via != viaSocket {
+		ownerRequired(w)
+		return false
+	}
 	if id.Via == viaSocket {
 		if s.Peer {
 			writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "on a remote machine, approve, push and open PRs with a signed intent: configure approvers in the repo's .truehand/config.yaml on its base branch", "code": "remote-approval-unavailable"})
@@ -419,6 +450,9 @@ func (s *Server) enqueue(q appstate.QueuedAction, id identity) (string, error) {
 var AuthMethod = humanauth.Method
 
 func humanMethod(id identity) string {
+	if id.proof != nil && id.proof.owner != "" {
+		return "passkey"
+	}
 	if id.Shell {
 		return "app+" + AuthMethod()
 	}

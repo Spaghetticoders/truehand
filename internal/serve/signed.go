@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spaghetticoders/truehand/internal/config"
 	"github.com/spaghetticoders/truehand/internal/core"
 	"github.com/spaghetticoders/truehand/internal/evidence"
 	"github.com/spaghetticoders/truehand/internal/gate"
@@ -24,6 +25,7 @@ import (
 const (
 	codeSignatureRequired = "signature-required"
 	codeNoApprovers       = "no-approvers"
+	codeSignatureRefused  = "signature-refused"
 )
 
 func (l *located) approvers() []string {
@@ -38,9 +40,51 @@ func (l *located) approvers() []string {
 	return ids
 }
 
-// signatureRequired names the repo's approvers, so the Mac app knows which of its keys to use.
-func signatureRequired(w http.ResponseWriter, l *located) {
-	writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this repo lists approvers on its base branch: confirm with a signed intent", "code": codeSignatureRequired, "approvers": l.approvers()})
+// signatureRequired names the repo's approvers, so the app knows which of its keys to use.
+func (s *Server) signatureRequired(w http.ResponseWriter, l *located) {
+	aps, _ := l.WS.Approvers(l.Task)
+	writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this repo lists approvers on its base branch: confirm with a signed intent", "code": codeSignatureRequired, "approvers": l.approvers(), "approverKeys": s.approverKeys(aps)})
+}
+
+type approverKey struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	RPID string `json:"rpId,omitempty"`
+	// CredentialID is the passkey registered at this server with the approver's key, if any.
+	CredentialID string `json:"credentialId,omitempty"`
+}
+
+func (s *Server) approverKeys(aps []config.Approver) []approverKey {
+	ps, _ := s.Store.Passkeys()
+	out := []approverKey{}
+	for _, a := range aps {
+		k := approverKey{ID: a.ID, Name: a.Name, RPID: a.RPID}
+		if ps != nil {
+			fp := keyFingerprint(a.PublicKey)
+			for _, p := range ps.Passkeys {
+				if fp != "invalid" && keyFingerprint(p.PublicKey) == fp && (a.RPID == "" || a.RPID == p.RPID) {
+					k.CredentialID = p.ID
+				}
+			}
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// allowFor is what navigator.credentials.get needs to sign with approver id: its rp_id and
+// the passkey registered here with its key, when there is one.
+func (s *Server) allowFor(aps []config.Approver, id string) map[string]any {
+	for _, k := range s.approverKeys(aps) {
+		if k.ID == id {
+			allow := []map[string]string{}
+			if k.CredentialID != "" {
+				allow = append(allow, map[string]string{"type": "public-key", "id": k.CredentialID})
+			}
+			return map[string]any{"rpId": k.RPID, "allowCredentials": allow}
+		}
+	}
+	return map[string]any{"allowCredentials": []map[string]string{}}
 }
 
 func signedError(w http.ResponseWriter, err error) {
@@ -48,7 +92,7 @@ func signedError(w http.ResponseWriter, err error) {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "configure approvers in .truehand/config.yaml on the base branch to approve with a signature", "code": codeNoApprovers})
 		return
 	}
-	httpError(w, http.StatusForbidden, "signed intent refused: "+err.Error())
+	writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "signed intent refused: " + err.Error(), "code": codeSignatureRefused})
 }
 
 func headOf(l *located) (string, error) {
@@ -108,7 +152,10 @@ func (s *Server) intent(w http.ResponseWriter, r *http.Request) {
 	if body.Action != sign.ActionApprovePlan {
 		branch, _ = pushBranch(l)
 	}
-	writeJSON(w, map[string]any{"intent": in, "message": base64.StdEncoding.EncodeToString(in.Message()), "title": l.Task.Title, "branch": branch})
+	aps, _ := l.WS.Approvers(l.Task)
+	out := s.allowFor(aps, body.Approver)
+	out["intent"], out["message"], out["title"], out["branch"] = in, base64.StdEncoding.EncodeToString(in.Message()), l.Task.Title, branch
+	writeJSON(w, out)
 }
 
 func (s *Server) approveSigned(w http.ResponseWriter, l *located, sg *sign.Signed) {
@@ -137,6 +184,12 @@ func (s *Server) verifyPushIntent(w http.ResponseWriter, l *located, action stri
 		return false
 	}
 	if _, err := l.WS.VerifyIntent(l.Task, action, head, *sg); err != nil {
+		signedError(w, err)
+		return false
+	}
+	// The repo's record of spent nonces lives in .git, where an agent can delete it; the
+	// server's own record survives that.
+	if err := s.spendIntent(sg.Intent.Nonce); err != nil {
 		signedError(w, err)
 		return false
 	}

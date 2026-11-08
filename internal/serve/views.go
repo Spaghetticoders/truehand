@@ -609,13 +609,23 @@ type meView struct {
 	CanApprove bool   `json:"canApprove"`
 	DeviceName string `json:"deviceName,omitempty"`
 	ReadOnly   bool   `json:"readOnly"`
+	// Headless: no Mac app; human actions need an owner's passkey and nothing is queued.
+	Headless bool `json:"headless"`
+	// Owner: this device registered a passkey that is an owner of this server.
+	Owner bool `json:"owner"`
 }
 
 func (s *Server) meOf(r *http.Request) meView {
 	id := identityOf(r)
 	m := meView{Via: id.Via, CanApprove: id.Shell, ReadOnly: s.ReadOnly || id.ViewOnly}
+	m.Headless = s.Headless
 	if id.Device != nil {
 		m.DeviceName = id.Device.Name
+		if ps, valid, err := s.owners(); err == nil {
+			for _, p := range ps.Passkeys {
+				m.Owner = m.Owner || valid[p.ID] && p.Device == id.Device.ID
+			}
+		}
 	}
 	return m
 }

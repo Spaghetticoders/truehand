@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -55,7 +56,7 @@ func (s *Server) writePush(w http.ResponseWriter, l *located) {
 	s.broadcast(sseEvent{"changed", l.Project.ID})
 	res := actResult{OK: err == nil, Output: string(out)}
 	if err != nil {
-		res.Error = "git push failed"
+		res.Error = "git push failed" + s.hookBinNote()
 	}
 	writeJSON(w, res)
 }
@@ -195,4 +196,16 @@ func (s *Server) pushable(l *located, pr bool) *codedError {
 		return &codedError{"gh is not installed: install it and run `gh auth login`", "gh-missing"}
 	}
 	return nil
+}
+
+// hookBinNote names the truehand the repo's hooks ran, for a failed push.
+func (s *Server) hookBinNote() string {
+	if s.TruehandBin == "" {
+		return " (the repo's hooks ran the truehand on PATH)"
+	}
+	bin := filepath.Join(s.TruehandBin, "truehand")
+	if real, err := filepath.EvalSymlinks(bin); err == nil {
+		bin = real
+	}
+	return " (the repo's hooks ran " + bin + ")"
 }
