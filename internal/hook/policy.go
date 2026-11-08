@@ -90,10 +90,16 @@ func checkBash(ws *core.Workspace, cwd, line string, depth int) Decision {
 		return deny("approvals are for humans. Ask the user to run `truehand approve` in their terminal or approve from the Truehand app")
 	}
 	segs := segments(line)
+	heredoc := strings.Contains(line, "<<")
 	for _, raw := range segs {
 		// An interpreter's script (inline or a heredoc) is opaque: any mention of truehand's
-		// own files is refused, since what the script does with them cannot be seen.
-		if words := stripEnv(raw); len(words) > 0 && interpreters[filepath.Base(words[0])] && protectedRe.MatchString(line) {
+		// own files in it is refused, since what the script does with them cannot be seen. A
+		// heredoc's body is on other lines, so then the whole line counts.
+		words := stripEnv(raw)
+		if len(words) == 0 || !interpreters[filepath.Base(words[0])] {
+			continue
+		}
+		if heredoc && protectedRe.MatchString(line) || protectedRe.MatchString(strings.Join(words, " ")) {
 			return deny("`%s` scripts may not touch truehand's files (config.yaml, task.yaml, events, approvals, evidence). Read them with `truehand task show --json` or cat; edit plan.md with the editor; config.yaml is for humans", words[0])
 		}
 	}
@@ -214,12 +220,131 @@ func checkShellWrite(ws *core.Workspace, cwd string, words []string) Decision {
 	if !writeCmds[words[0]] {
 		return allow()
 	}
+	if words[0] == "cp" || words[0] == "install" {
+		for _, w := range copyTargets(words[1:]) {
+			if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !agentWritable(w) {
+				return deny("`%s` would modify %s: only truehand writes it", words[0], w)
+			}
+		}
+		return allow()
+	}
+	if words[0] == "sed" && !sedWrites(words[1:], ProtectedPath(ws, cwd) || strings.Contains(cwd, ".truehand")) {
+		return allow()
+	}
 	for _, w := range words[1:] {
 		if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !agentWritable(w) {
 			return deny("`%s` would modify %s: only truehand writes it", words[0], w)
 		}
 	}
 	return allow()
+}
+
+// copyTargets are what cp or install write: the -t directory, or the last operand. Reading
+// truehand's files is fine; any other option value is not a path written.
+func copyTargets(args []string) []string {
+	var operands []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			operands = append(operands, args[i+1:]...)
+			i = len(args)
+		case a == "-t" || a == "--target-directory":
+			if i+1 < len(args) {
+				return []string{args[i+1]}
+			}
+		case strings.HasPrefix(a, "--target-directory="):
+			return []string{strings.TrimPrefix(a, "--target-directory=")}
+		case a == "--suffix" || a == "--mode" || a == "--owner" || a == "--group":
+			i++
+		case strings.HasPrefix(a, "--"):
+		case strings.HasPrefix(a, "-") && a != "-":
+			// A cluster of short flags: t takes the rest (or the next word) as the target;
+			// S, m, o and g take a value the same way.
+			for j := 1; j < len(a); j++ {
+				if !strings.ContainsRune("tSmog", rune(a[j])) {
+					continue
+				}
+				val := a[j+1:]
+				if val == "" && i+1 < len(args) {
+					i++
+					val = args[i]
+				}
+				if a[j] == 't' {
+					return []string{val}
+				}
+				break
+			}
+		default:
+			operands = append(operands, a)
+		}
+	}
+	if len(operands) == 0 {
+		return nil
+	}
+	return operands[len(operands)-1:]
+}
+
+// sedWrites reports whether sed may write a protected file: in place, or through a w/W
+// command in a script that names one (or any w/W when run from inside .truehand). A script
+// file is opaque, so it counts as writing.
+func sedWrites(args []string, inProtected bool) bool {
+	var scripts []string
+	explicit := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			if !explicit && i+1 < len(args) {
+				scripts = append(scripts, args[i+1])
+			}
+			i = len(args)
+		case a == "-e" || a == "--expression":
+			explicit = true
+			if i+1 < len(args) {
+				scripts = append(scripts, args[i+1])
+				i++
+			}
+		case strings.HasPrefix(a, "--expression="):
+			explicit = true
+			scripts = append(scripts, strings.TrimPrefix(a, "--expression="))
+		case a == "-f" || a == "--file" || strings.HasPrefix(a, "--file="):
+			return true
+		case strings.HasPrefix(a, "--in-place"):
+			return true
+		case strings.HasPrefix(a, "--"):
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			flags := a[1:]
+			if j := strings.IndexAny(flags, "ef"); j >= 0 {
+				if strings.ContainsAny(flags[:j], "iI") {
+					return true
+				}
+				if flags[j] == 'f' {
+					return true
+				}
+				explicit = true
+				if v := flags[j+1:]; v != "" {
+					scripts = append(scripts, v)
+				} else if i+1 < len(args) {
+					scripts = append(scripts, args[i+1])
+					i++
+				}
+				continue
+			}
+			if strings.ContainsAny(flags, "iI") {
+				return true
+			}
+		case !explicit:
+			scripts = append(scripts, a)
+			explicit = true
+		}
+	}
+	for _, sc := range scripts {
+		if strings.Contains(sc, ".truehand") || inProtected && strings.ContainsAny(sc, "wW") {
+			return true
+		}
+	}
+	return false
 }
 
 // agentWritable reports the task files the agent writes itself.
