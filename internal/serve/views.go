@@ -449,11 +449,11 @@ func (s *Server) summarize(pd *projectData, pt core.ProjectTask, in core.Waiting
 
 // stackFacts fills a summary's stack fields; an error is shown, never fatal to the board.
 func (s *Server) stackFacts(sum *taskSummary, ws *core.Workspace, t *board.Task, pv *core.ProjectView) {
-	if t.StackedOn != "" {
-		sum.StackedOn = t.StackedOn
-		if _, err := ws.BaseOf(t); err != nil {
-			sum.StackError = err.Error()
-		}
+	sum.StackedOn = t.StackedOn
+	// Also a task that is not stacked: a base past where its branch leaves the base ref
+	// needs a restack too.
+	if _, err := ws.BaseOf(t); err != nil {
+		sum.StackError = err.Error()
 	}
 	var by []string
 	if pv != nil {

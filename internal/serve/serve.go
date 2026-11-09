@@ -207,6 +207,8 @@ func (s *Server) routes() *http.ServeMux {
 	h("POST /api/projects/{pid}/tasks/{id}/intent", s.intent)
 	h("GET /api/projects/{pid}/tasks/{id}/restack", s.getRestack)
 	h("POST /api/projects/{pid}/tasks/{id}/restack", s.postRestack)
+	h("GET /api/projects/{pid}/tasks/{id}/scope", s.getScope)
+	h("POST /api/projects/{pid}/tasks/{id}/scope", s.postScope)
 	h("DELETE /api/projects/{pid}/tasks/{id}/worktree", s.deleteWorktree)
 
 	h("GET /api/queued", s.queued)

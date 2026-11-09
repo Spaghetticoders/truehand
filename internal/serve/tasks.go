@@ -374,13 +374,13 @@ func (s *Server) comment(w http.ResponseWriter, r *http.Request) {
 func currentPlan(ws *core.Workspace, id, sha string) error {
 	b, err := os.ReadFile(ws.Store.PlanPath(id))
 	if err != nil {
-		return errors.New("the task has no plan.md")
+		return &codedError{"the task has no plan.md", "plan-missing"}
 	}
 	if evidence.HashBytes(b) != sha {
-		return errors.New("plan.md changed since you read it: reload and read it again")
+		return &codedError{"plan.md changed since you read it: reload and read it again", "plan-changed"}
 	}
 	if probs := plan.Check(string(b)); len(probs) > 0 {
-		return errors.New("plan.md is incomplete")
+		return &codedError{"plan.md is incomplete", "plan-incomplete"}
 	}
 	return nil
 }

@@ -267,3 +267,21 @@ func TestRestackWithIgnoredFiles(t *testing.T) {
 		t.Fatalf("restacked event = %+v", ev)
 	}
 }
+
+func TestApprovePlanErrorsHaveCodes(t *testing.T) {
+	e := newEnv(t, false)
+	path := e.taskPath("T-1") + "/actions/approve-plan"
+	resp, b := e.req("POST", path, `{"planSha256":"`+strings.Repeat("0", 64)+`"}`, asShell)
+	if resp.StatusCode != 409 || !strings.Contains(string(b), `"code":"plan-changed"`) {
+		t.Fatalf("stale plan = %d %s", resp.StatusCode, b)
+	}
+	ws, _ := core.Open(e.root)
+	os.WriteFile(ws.Store.PlanPath("T-1"), []byte("# T\n\n## Goal\ng\n"), 0o644)
+	resp, b = e.req("POST", path, `{"planSha256":"`+e.planSHA()+`"}`, asShell)
+	if resp.StatusCode != 409 || !strings.Contains(string(b), `"code":"plan-incomplete"`) {
+		t.Fatalf("incomplete plan = %d %s", resp.StatusCode, b)
+	}
+	if e.authCount() != 0 {
+		t.Fatal("asked the OS for a plan that cannot be approved")
+	}
+}

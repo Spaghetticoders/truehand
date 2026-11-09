@@ -240,7 +240,7 @@ func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, l *located,
 		return
 	}
 	if err := currentPlan(l.WS, l.Task.ID, sha); err != nil {
-		httpError(w, http.StatusConflict, err.Error())
+		writeJSONStatus(w, http.StatusConflict, err)
 		return
 	}
 	q := &appstate.QueuedAction{Kind: "approve", Project: l.Project.ID, Task: l.Task.ID, PlanSHA256: sha}
@@ -387,6 +387,10 @@ func (s *Server) confirmQueued(w http.ResponseWriter, r *http.Request) {
 		s.confirmRestack(w, r, *p, q)
 		return
 	}
+	if q.Kind == "scope" {
+		s.confirmScope(w, r, *p, q)
+		return
+	}
 	var body struct {
 		SignedIntent *sign.Signed `json:"signedIntent"`
 	}
@@ -404,9 +408,9 @@ func (s *Server) confirmQueued(w http.ResponseWriter, r *http.Request) {
 		if err := currentPlan(l.WS, l.Task.ID, q.PlanSHA256); err != nil || l.Task.State != board.Planned {
 			_, _ = s.takeQueued(q.ID, true)
 			if err == nil {
-				err = fmt.Errorf("task %s is no longer planned", l.Task.ID)
+				err = &codedError{fmt.Sprintf("task %s is no longer planned", l.Task.ID), "not-planned"}
 			}
-			httpError(w, http.StatusConflict, err.Error())
+			writeJSONStatus(w, http.StatusConflict, err)
 			return
 		}
 		reason = humanauth.ApprovalPrompt(l.Task.ID, l.Task.Title)
