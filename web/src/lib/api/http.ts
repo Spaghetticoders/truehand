@@ -1,4 +1,4 @@
-import type { ActResult, Api, ActionArgs, IntentRequest, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, RestackPreview, SignedIntent, TaskAction } from './types'
+import type { ActResult, Api, ActionArgs, IntentRequest, Me, NewTask, PtyHandlers, ServerEvent, SettingsPatch, RestackPreview, ScopePreview, SignedIntent, TaskAction } from './types'
 
 export class ApiError extends Error {
   constructor(
@@ -29,6 +29,7 @@ const VIA_SHELL = [
   `POST /api/projects/${SEG}/commit-config`,
   `POST /api/projects/${SEG}/push-base`,
   `POST /api/projects/${SEG}/tasks/${SEG}/restack`,
+  `POST /api/projects/${SEG}/tasks/${SEG}/scope`,
   `POST /api/passkeys/enroll-code`,
   `DELETE /api/passkeys/${SEG}`,
   `POST /api/token/rotate`,
@@ -129,6 +130,8 @@ export class HttpApi implements Api {
     this.req<IntentRequest>('POST', `/api/projects/${enc(pid)}/config-intent`, { action, configSha256, approver })
   pushBase = (pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }) =>
     this.req<ActResult>('POST', `/api/projects/${enc(pid)}/push-base`, signedIntent ? { signedIntent } : { from: shown?.from, head: shown?.head })
+  scopePreview = (pid: string, id: string) => this.req<ScopePreview>('GET', `${this.t(pid, id)}/scope`)
+  widenScope = (pid: string, id: string, p: { add: string[] }) => this.req<Awaited<ReturnType<Api['widenScope']>>>('POST', `${this.t(pid, id)}/scope`, p)
   restackPreview = (pid: string, id: string) => this.req<RestackPreview>('GET', `${this.t(pid, id)}/restack`)
   restack = (pid: string, id: string, p: { point: string; stackedOn: string; ignoreHash?: string }) => this.req<Awaited<ReturnType<Api['restack']>>>('POST', `${this.t(pid, id)}/restack`, p)
   pushPreview = (pid: string) => this.req<Awaited<ReturnType<Api['pushPreview']>>>('GET', `/api/projects/${enc(pid)}/push-base`)
@@ -235,7 +238,9 @@ export class HttpApi implements Api {
       es.addEventListener('machine', (e) => onEvent({ type: 'machine', ...JSON.parse(data(e)) }))
       es.addEventListener('passkeys', () => onEvent({ type: 'passkeys' }))
       // The browser gives up after a 401 (not signed in yet): try again until it works.
+      es.onopen = () => onEvent({ type: 'connection', up: true })
       es.onerror = () => {
+        onEvent({ type: 'connection', up: false })
         if (es.readyState === EventSource.CLOSED && !stopped) retry = setTimeout(connect, 3000)
       }
     }

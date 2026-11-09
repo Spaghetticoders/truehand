@@ -1,5 +1,6 @@
 import type {
   RestackPreview,
+  ScopePreview,
   OwnerAction,
   ApproverKey,
   IntentRequest,
@@ -144,6 +145,13 @@ const stacks: Record<string, Partial<TaskSummary>> = {
   'TH-15': { tip: 'c0ffee1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b', stackedBy: ['TH-21'] },
 }
 
+// CASSA-14 also touched files outside its scope (lib/** only).
+const outside: Record<string, string[]> = {
+  'CASSA-14': ['ios/Runner/Info.plist', 'android/app/src/main/AndroidManifest.xml', 'pubspec.yaml', 'assets/[draft].png', 'docs/what?.md', 'notes/back\\up.txt'],
+  // Delivered, as COACH-2 on Wovio: its out-of-scope files must still reach the inbox.
+  'CASSA-7': ['ios/Podfile.lock', 'tool/wakeword/train.py'],
+}
+
 function summary(r: Row): TaskSummary {
   const { description: _d, externalTicket: _e, scope: _s, comments, plan: _p, planSha256: _ps, planProblems: _pp, checks: _c, proofs: _pr, diff: _df, history: _h, approvals: _a, planReadyFact, deliverGateOpen: _g, patches: _pt, ...rest } = r
   return {
@@ -185,11 +193,15 @@ export class FixtureApi implements Api {
   }
 
   async snapshot(): Promise<Snapshot> {
+    // ?scenario= plays the phone inbox's empty states: noprojects, quiet (nothing running), working (agents busy).
+    const scenario = new URLSearchParams(location.search).get('scenario')
+    const none = scenario === 'noprojects'
+    const calm = scenario === 'quiet' || scenario === 'working'
     return clone({
       clients,
-      projects,
-      tasks: rows.map(summary),
-      sessions,
+      projects: none ? [] : projects,
+      tasks: none || calm ? [] : rows.map(summary),
+      sessions: none || calm ? sessions.filter(() => scenario === 'working').map((x) => ({ ...x, taskId: undefined, status: 'working' as const, waitingFor: undefined })) : sessions,
       settings,
       me: canApprove() ? { via: 'token', canApprove: true, readOnly: false } : { via: 'device', canApprove: false, deviceName: 'Galaxy S25', readOnly: false, headless: headless() },
       queued: headless() ? [] : queued,
@@ -407,6 +419,26 @@ export class FixtureApi implements Api {
   }
 
   private restacked = new Set<string>()
+
+  async scopePreview(pid: string, id: string): Promise<ScopePreview> {
+    const files = outside[id] ?? []
+    return { task: id, scope: this.row(pid, id).scope, outside: files, outsideCount: files.length, add: files.map((f) => f.replace(/[*?\\]/g, '\\$&')) }
+  }
+
+  async widenScope(pid: string, id: string, p: { add: string[] }) {
+    await asOwner('POST', `/api/projects/${pid}/tasks/${id}/scope`, p)
+    if (!headless() && !canApprove()) {
+      const q = { id: rid('q_'), kind: 'scope' as const, projectId: pid, taskId: id, device: 'Galaxy S25', time: now() }
+      queued.push(q)
+      this.changed(pid)
+      return { ok: true, queued: true, queuedId: q.id }
+    }
+    const r = this.row(pid, id)
+    r.scope = [...r.scope, ...p.add]
+    delete outside[id]
+    this.changed(pid)
+    return { ok: true, scope: r.scope }
+  }
 
   async restackPreview(pid: string, id: string): Promise<RestackPreview> {
     // TH-21 is built on TH-15, delivered but not merged yet.

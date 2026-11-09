@@ -4,6 +4,8 @@ import { shell } from '../api/http'
 import { known } from '../passkeys'
 
 interface AppState {
+  /** The live connection to the server is down: what is shown may be stale. */
+  offline: boolean
   ready: boolean
   /** The browser is not paired yet: only pairing can be shown. */
   needsAuth: boolean
@@ -11,7 +13,7 @@ interface AppState {
   data: Snapshot | null
 }
 
-export const app = $state<AppState>({ ready: false, needsAuth: false, error: null, data: null })
+export const app = $state<AppState>({ offline: false, ready: false, needsAuth: false, error: null, data: null })
 
 let shellCanApprove: boolean | null = null
 let relogged = false
@@ -68,6 +70,8 @@ async function load() {
     if (shellCanApprove) snap.me.canApprove = true
     app.data = snap
     app.needsAuth = false
+    app.error = null
+    app.offline = false
     app.ready = true
     setLocale(snap.settings.language)
   } catch (e) {
@@ -76,7 +80,11 @@ async function load() {
       if (await relogin()) return
       app.needsAuth = true
       app.ready = true
-    } else app.error = String(e)
+    } else {
+      app.error = String(e)
+      // A fetch that never reached the server (TypeError) or a proxy error means the server is gone.
+      if (!(e instanceof ApiError) || e.status >= 502) app.offline = true
+    }
   }
 }
 
@@ -89,6 +97,13 @@ const soon = () => {
 export function startSync() {
   void refresh()
   return api.events((e) => {
+    if (e.type === 'connection') {
+      // Back online: what changed meanwhile comes with a fresh snapshot.
+      const was = app.offline
+      app.offline = !e.up
+      if (was && e.up) soon()
+      return
+    }
     if (e.type === 'changed' && e.project === '') writes++
     if (e.type === 'session') {
       const s = app.data?.sessions.find((s) => s.id === e.id)

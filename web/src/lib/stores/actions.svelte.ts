@@ -22,7 +22,7 @@ export function toast(kind: Toast['kind'], text: string, href?: string) {
   setTimeout(() => (toasts.list = toasts.list.filter((x) => x.id !== id)), kind === 'ok' ? 4500 : 8000)
 }
 
-const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled', 'base-moved', 'not-only-config', 'base-diverged', 'base-unknown', 'base-behind', 'config-invalid', 'push-base-refused', 'restack-moved', 'nothing-to-push', 'base-not-remote', 'signature-refused'] as const
+const CODED = ['already-merged', 'no-remote', 'remote-not-github', 'gh-missing', 'config-not-committed', 'config-not-pushed', 'no-approvers', 'config-changed', 'nothing-to-commit', 'other-changes-staged', 'machine-disabled', 'base-moved', 'not-only-config', 'base-diverged', 'base-unknown', 'base-behind', 'config-invalid', 'push-base-refused', 'restack-moved', 'scope-moved', 'nothing-outside', 'scope-refused', 'scope-unavailable', 'plan-missing', 'not-planned', 'nothing-to-push', 'base-not-remote', 'signature-refused'] as const
 
 /** The server's technical reason behind a translated message, for a collapsed detail. */
 export function errorDetail(e: unknown): string | null {
@@ -34,6 +34,8 @@ export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.code === 'owner-required') return t('passkey.ownerRequired')
     if (/confirmed through this one/.test(e.message)) return t('passkey.dependsOn')
+    if (e.code === 'plan-changed' || /^plan\.md changed since you read it/.test(e.message)) return t('err.plan-changed')
+    if (e.code === 'plan-incomplete' || /^plan\.md is incomplete/.test(e.message)) return t('err.plan-incomplete')
     if (/revoke this passkey from another owner/.test(e.message)) return t('passkey.revokeSelf')
     const code = e.code as (typeof CODED)[number] | undefined
     if (code && CODED.includes(code)) return t(`err.${code}`)
@@ -88,7 +90,8 @@ function checked(r: ActResult): ActResult {
 
 export const busy = $state<{ key: string | null }>({ key: null })
 
-export async function runAction(task: TaskSummary, action: TaskAction) {
+/** opts.planSha256: approve the plan the person read, not whatever is current. */
+export async function runAction(task: TaskSummary, action: TaskAction, opts: { planSha256?: string } = {}) {
   const { projectId: pid, id } = task
   const agentTab = (session?: string) => go({ name: 'task', project: pid, id, tab: 'agent', session })
   if (action === 'activate') return go({ name: 'activate', project: pid })
@@ -107,9 +110,9 @@ export async function runAction(task: TaskSummary, action: TaskAction) {
         return agentTab(r.sessionId)
       }
       case 'approve-plan': {
-        const d = await api.task(pid, id)
-        const r = await withSignature(pid, id, action, { planSha256: d.planSha256 })
-        if (r.queued && r.queuedId) noteQueued({ id: r.queuedId, kind: 'approve', projectId: pid, taskId: id, planSha256: d.planSha256, device: t('queuedKind.thisDevice'), time: new Date().toISOString() })
+        const planSha256 = opts.planSha256 ?? (await api.task(pid, id)).planSha256
+        const r = await withSignature(pid, id, action, { planSha256 })
+        if (r.queued && r.queuedId) noteQueued({ id: r.queuedId, kind: 'approve', projectId: pid, taskId: id, planSha256, device: t('queuedKind.thisDevice'), time: new Date().toISOString() })
         return toast(r.queued ? 'queued' : 'ok', t(r.queued ? 'action.queued' : 'action.planApproved'))
       }
       case 'deliver':
@@ -141,7 +144,7 @@ export async function confirmQueued(qid: string) {
       r = checked(await api.confirmQueued(qid))
     } catch (e) {
       const q = app.data?.queued.find((x) => x.id === qid)
-      if (!q || q.kind === 'config' || q.kind === 'commit-config' || q.kind === 'restack') throw e
+      if (!q || q.kind === 'config' || q.kind === 'commit-config' || q.kind === 'restack' || q.kind === 'scope') throw e
       r = checked(await api.confirmQueued(qid, await signFor(e, q.projectId, q.taskId, QUEUED_ACTION[q.kind], q.planSha256)))
     }
     toast('ok', t('action.confirmed'), r.url)

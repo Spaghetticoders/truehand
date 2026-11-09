@@ -2,6 +2,8 @@
   import Dot from '../components/Dot.svelte'
   import Icon from '../components/Icon.svelte'
   import Terminal from '../components/Terminal.svelte'
+  import OfflineBanner from '../components/OfflineBanner.svelte'
+  import { layout } from '../stores/layout.svelte'
   import { api, type Session } from '../api'
   import { t, timeAgo } from '../i18n/index.svelte'
   import { app, clientName, dotOf, isLive, isRemote, machineOf, project, statusKey, taskOf } from '../stores/app.svelte'
@@ -35,6 +37,7 @@
     </p>
   </header>
 
+  {#if layout.phone}<OfflineBanner />{/if}
   {#if sessions.length}
     <ul class="grid">
       {#each sessions as s (s.id)}
@@ -76,7 +79,7 @@
         </li>
       {/each}
     </ul>
-  {:else}
+  {:else if !app.error && !app.offline}
     <p class="muted">{t('sessions.empty')}</p>
   {/if}
 </div>

@@ -7,6 +7,8 @@
   import InvisibleNotice from '../components/InvisibleNotice.svelte'
   import ActionButton from '../components/ActionButton.svelte'
   import RestackNotice from '../components/RestackNotice.svelte'
+  import ScopeNotice from '../components/ScopeNotice.svelte'
+  import { scopeMatters } from '../stores/scope.svelte'
   import Modal from '../components/Modal.svelte'
   import { api, ApiError, TASK_STATES, type FilePatch, type TaskDetail } from '../api'
   import { t, timeAgo, type Key } from '../i18n/index.svelte'
@@ -64,7 +66,13 @@
     diff: detail?.diff.length,
   })
 
-  const tabHref = (tb: TaskTab) => href({ name: 'task', project: projectId, id: taskId, tab: tb })
+  // A tab is a view of the same task: it replaces the history entry, so «back» leaves the task at once.
+  function toTab(tb: TaskTab, e?: MouseEvent) {
+    if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0)) return
+    e?.preventDefault()
+    location.replace(tabHref(tb))
+  }
+  const tabHref = (tb: TaskTab) => href({ name: 'task', project: projectId, id: taskId, tab: tb, tabSet: true })
   const label = (prefix: 'check' | 'hand', id: string) => {
     const k = `${prefix}.${id}` as Key
     const s = t(k)
@@ -77,7 +85,7 @@
     if (next === -2) return
     e.preventDefault()
     const tb = TASK_TABS[(next + TASK_TABS.length) % TASK_TABS.length]
-    location.hash = tabHref(tb)
+    toTab(tb)
     queueMicrotask(() => tabsEl?.querySelector<HTMLElement>(`#tab-${tb}`)?.focus())
   }
 
@@ -232,12 +240,13 @@
         <p class="notice"><Icon name="branch" />{t('stack.on', { on: detail.stackedOn })}</p>
       {/if}
       {#if !readOnly && !detail.merged}<RestackNotice {projectId} {taskId} stackError={detail.stackError} />{/if}
+      {#if summary && scopeMatters(summary) && !detail.stackError}<ScopeNotice {projectId} {taskId} />{/if}
     </header>
 
     <!-- svelte-ignore a11y_interactive_supports_focus -->
     <div class="tabs" role="tablist" tabindex="-1" bind:this={tabsEl} onkeydown={tabKey}>
       {#each TASK_TABS as tb (tb)}
-        <a role="tab" href={tabHref(tb)} aria-selected={tab === tb} tabindex={tab === tb ? 0 : -1} aria-controls="panel" id="tab-{tb}">
+        <a role="tab" href={tabHref(tb)} onclick={(e) => toTab(tb, e)} aria-selected={tab === tb} tabindex={tab === tb ? 0 : -1} aria-controls="panel" id="tab-{tb}">
           {t(`task.tabs.${tb}`)}
           {#if counts[tb]}<span class="n">{counts[tb]}</span>{/if}
           {#if tb === 'proofs' && detail.proofs.some((e) => e.verdict === 'fail')}<span class="flag" aria-hidden="true"></span>{/if}

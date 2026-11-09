@@ -465,7 +465,8 @@
     "config": "Rules change",
     "thisDevice": "this device",
     "commit-config": "Rules commit",
-    "restack": "base move"
+    "restack": "base move",
+    "scope": "scope change"
   },
   "machine": {
     "title": "Machines",
@@ -528,7 +529,15 @@
     "signature-refused": "The server refused the signature: expired, already used, or no longer matching what you see. Try again.",
     "base-behind": "The remote moved ahead: use “Update from remote” on the project's board and try again.",
     "push-base-refused": "Push refused: the base's history is not what was expected (for example it was rewritten). Check it with git; the reason is in the technical details.",
-    "restack-moved": "The point changed after the preview: reload and check again."
+    "restack-moved": "The point changed after the preview: reload and check again.",
+    "plan-changed": "The plan changed while you were reading it: open it again and reread it before approving.",
+    "plan-incomplete": "The plan is incomplete: some sections are missing. Send it back to the agent.",
+    "scope-moved": "The list of files changed after the preview: reload and check again.",
+    "nothing-outside": "No files are outside the scope any more: nothing to widen.",
+    "scope-refused": "The scope was not widened: there is nothing new to add.",
+    "scope-unavailable": "The task's scope cannot be worked out right now (for example the chain of tasks below it is broken).",
+    "plan-missing": "The task has no plan to approve yet.",
+    "not-planned": "The task is no longer waiting for its plan to be approved."
   },
   "passkey": {
     "title": "Passkeys",
@@ -649,7 +658,8 @@
       "machines": "Add or update a machine",
       "taskAction": "Action on a task",
       "taskActionOf": "{action} · {task}",
-      "restack": "Move the task's base"
+      "restack": "Move the task's base",
+      "scope": "Widen the task's scope"
     },
     "ownerTitle": {
       "add-owner": "Make {label} an owner of the server",
@@ -746,5 +756,74 @@
     "closed": "Other tasks are stacked on this one ({by}): it is judged up to commit {tip} and agents no longer work on it. Delivering, pushing and the PR remain.",
     "broken": "The chain of tasks below this one no longer holds: no checks or proofs until the base is moved, and the server proposes no point right now.",
     "brokenFix": "The chain of tasks below this one no longer holds: no checks or proofs until you move the base (below)."
+  },
+  "mobile": {
+    "inbox": "To do",
+    "agents": "Agents",
+    "projects": "Projects",
+    "nav": "Navigation",
+    "waitingN": "{n} to decide",
+    "nothingWaiting": "nothing to decide",
+    "newTaskIn": "New task in {name}",
+    "sessionGone": "This session is gone."
+  },
+  "inbox": {
+    "open": "Open",
+    "unreachable": "The server is not answering: what you see may be out of date.",
+    "noPasskey": "To approve from this phone, register a passkey.",
+    "noProjects": "No projects yet. Add one to start.",
+    "agentsWorking": "The agents are working: nothing to decide for now.",
+    "seeAgents": "See the agents",
+    "allQuiet": "Nothing to do and no agent working.",
+    "seeProjects": "Go to projects",
+    "kind": {
+      "plan": "Plan to approve",
+      "permission": "The agent asks for permission",
+      "question": "The agent asks you",
+      "restack": "To move on top of another task",
+      "review": "Tested, to review",
+      "deliver": "Reviewed, ready",
+      "push": "To send to GitHub",
+      "pr": "PR to open",
+      "config": "Rules to confirm",
+      "queued": "Waiting for confirmation",
+      "scope": "Files outside the scope"
+    },
+    "retry": "Retry"
+  },
+  "decision": {
+    "planTitle": "Approve the plan",
+    "brief": "In short · the agent's summary",
+    "noPlan": "The plan is empty.",
+    "planCode": "Plan code",
+    "fullPlan": "Full plan",
+    "openTask": "Open the task",
+    "readFirst": "Open the full plan to approve.",
+    "whole": {
+      "one": "You approve the whole plan (1 section), not only the summary.",
+      "other": "You approve the whole plan ({n} sections), not only the summary."
+    },
+    "alsoAsks": "The agent also asked you a question: approving the plan does not answer it.",
+    "answer": "Answer"
+  },
+  "scope": {
+    "title": {
+      "one": "1 file outside the scope",
+      "other": "{n} files outside the scope"
+    },
+    "body": "The agent changed files the task did not plan for. If they are fine, widen the scope; otherwise send the task back to the agent.",
+    "button": "Widen the scope",
+    "done": "Scope widened.",
+    "cardLine": "Files outside the scope: {n}",
+    "special": "name with special characters: only this file is added",
+    "willAdd": "These files join the scope ({n})"
+  },
+  "agents": {
+    "theirs": "The agent handles these",
+    "theirsHint": "Failing checks or stale proofs: the agent fixes them, no decision needed from you.",
+    "failing": "Checks failing",
+    "stale": "Proofs stale",
+    "sessions": "Sessions",
+    "none": "No agent working."
   }
 }

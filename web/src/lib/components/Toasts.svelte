@@ -2,11 +2,12 @@
   import Icon from './Icon.svelte'
   import { t } from '../i18n/index.svelte'
   import { toasts } from '../stores/actions.svelte'
+  import { app } from '../stores/app.svelte'
 
   const ICON = { info: 'check', ok: 'check', error: 'alert', queued: 'clock' } as const
 </script>
 
-<div class="toasts" role="status" aria-live="polite">
+<div class="toasts" class:above-nav={!app.needsAuth && !!app.data} role="status" aria-live="polite">
   {#each toasts.list as x (x.id)}
     <div class="toast {x.kind}">
       <Icon name={ICON[x.kind]} size={16} />
@@ -66,6 +67,9 @@
       right: 12px;
       bottom: 12px;
       max-width: none;
+    }
+    .toasts.above-nav {
+      bottom: calc(68px + env(safe-area-inset-bottom));
     }
   }
 </style>

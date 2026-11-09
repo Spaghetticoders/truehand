@@ -35,6 +35,7 @@ export interface SignContext {
   diff?: string
   push?: import('../api').PushPreview
   restack?: import('../api').RestackPreview
+  scope?: import('../api').ScopePreview
   /** The owner passkey picked is not known on this device: a failure most likely means it is elsewhere. */
   elsewhere?: string
 }
@@ -178,10 +179,10 @@ export async function signConfig(pid: string, action: 'commit-config' | 'push-ba
   return signedOf(message, assertion)
 }
 
-let ownerExtra: Pick<SignContext, 'diff' | 'push' | 'restack'> = {}
+let ownerExtra: Pick<SignContext, 'diff' | 'push' | 'restack' | 'scope'> = {}
 
 /** Runs fn with what the page shows about the change, so an owner signature of it shows it too. */
-export async function withOwnerContext<T>(extra: Pick<SignContext, 'diff' | 'push' | 'restack'>, fn: () => Promise<T>): Promise<T> {
+export async function withOwnerContext<T>(extra: Pick<SignContext, 'diff' | 'push' | 'restack' | 'scope'>, fn: () => Promise<T>): Promise<T> {
   ownerExtra = extra
   try {
     return await fn()
@@ -240,6 +241,7 @@ const REQUESTS: [RegExp, Key][] = [
   [/^POST \/api\/machines/, 'passkey.request.machines'],
   [/^POST \/api\/projects\/[^/]+\/tasks\/[^/]+\/actions\//, 'passkey.request.taskAction'],
   [/^POST \/api\/projects\/[^/]+\/tasks\/[^/]+\/restack$/, 'passkey.request.restack'],
+  [/^POST \/api\/projects\/[^/]+\/tasks\/[^/]+\/scope$/, 'passkey.request.scope'],
 ]
 
 const TASK_ACTION = /^POST \/api\/projects\/[^/]+\/tasks\/([^/]+)\/actions\/(approve-plan|push|open-pr)$/

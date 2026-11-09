@@ -465,7 +465,8 @@
     "config": "Modifica delle regole",
     "thisDevice": "questo dispositivo",
     "commit-config": "Commit delle regole",
-    "restack": "spostamento della base"
+    "restack": "spostamento della base",
+    "scope": "allargamento dell'ambito"
   },
   "machine": {
     "title": "Macchine",
@@ -528,7 +529,15 @@
     "signature-refused": "Firma rifiutata dal server: è scaduta, già usata o non corrisponde più a ciò che vedi. Riprova.",
     "base-behind": "Il remoto è andato avanti: usa «Aggiorna dal remoto» sulla bacheca del progetto e riprova.",
     "push-base-refused": "Push rifiutato: la storia della base non è quella attesa (per esempio è stata riscritta). Controllala con git; il motivo è nei dettagli tecnici.",
-    "restack-moved": "Il punto è cambiato dopo l'anteprima: ricarica e controlla di nuovo."
+    "restack-moved": "Il punto è cambiato dopo l'anteprima: ricarica e controlla di nuovo.",
+    "plan-changed": "Il piano è cambiato mentre lo leggevi: riaprilo e rileggilo prima di approvare.",
+    "plan-incomplete": "Il piano è incompleto: mancano delle sezioni. Rimandalo all'agente.",
+    "scope-moved": "L'elenco dei file è cambiato dopo l'anteprima: ricarica e controlla di nuovo.",
+    "nothing-outside": "Non ci sono più file fuori dall'ambito: niente da allargare.",
+    "scope-refused": "L'ambito non è stato allargato: non c'è niente di nuovo da aggiungere.",
+    "scope-unavailable": "Non riesco a calcolare l'ambito di questo task in questo momento (per esempio la catena di task sotto è rotta).",
+    "plan-missing": "Il task non ha ancora un piano da approvare.",
+    "not-planned": "Il task non è più in attesa di approvazione del piano."
   },
   "passkey": {
     "title": "Passkey",
@@ -649,7 +658,8 @@
       "machines": "Aggiungi o aggiorna una macchina",
       "taskAction": "Azione su un task",
       "taskActionOf": "{action} · {task}",
-      "restack": "Sposta la base del task"
+      "restack": "Sposta la base del task",
+      "scope": "Allarga l'ambito del task"
     },
     "ownerTitle": {
       "add-owner": "Rendi {label} proprietaria del server",
@@ -746,5 +756,74 @@
     "closed": "Altri task sono impilati sopra questo ({by}): è valutato fino al commit {tip} e gli agenti non ci lavorano più. Restano consegna, push e PR.",
     "broken": "La catena di task sotto questo non regge più: niente controlli né prove finché non si sposta la base, e al momento il server non propone un punto.",
     "brokenFix": "La catena di task sotto questo non regge più: niente controlli né prove finché non sposti la base (qui sotto)."
+  },
+  "mobile": {
+    "inbox": "Da fare",
+    "agents": "Agenti",
+    "projects": "Progetti",
+    "nav": "Navigazione",
+    "waitingN": "{n} da decidere",
+    "nothingWaiting": "niente da decidere",
+    "newTaskIn": "Nuovo task in {name}",
+    "sessionGone": "Questa sessione non c'è più."
+  },
+  "inbox": {
+    "open": "Apri",
+    "unreachable": "Il server non risponde: quello che vedi potrebbe non essere aggiornato.",
+    "noPasskey": "Per approvare da questo telefono registra una passkey.",
+    "noProjects": "Nessun progetto ancora. Aggiungine uno per iniziare.",
+    "agentsWorking": "Gli agenti stanno lavorando: per ora non c'è niente da decidere.",
+    "seeAgents": "Guarda gli agenti",
+    "allQuiet": "Niente da fare e nessun agente al lavoro.",
+    "seeProjects": "Vai ai progetti",
+    "kind": {
+      "plan": "Piano da approvare",
+      "permission": "L'agente chiede un permesso",
+      "question": "L'agente ti chiede",
+      "restack": "Da spostare sopra un altro task",
+      "review": "Testato, da rivedere",
+      "deliver": "Rivisto, pronto",
+      "push": "Da inviare su GitHub",
+      "pr": "PR da aprire",
+      "config": "Regole da confermare",
+      "queued": "In attesa di conferma",
+      "scope": "File fuori dall'ambito"
+    },
+    "retry": "Riprova"
+  },
+  "decision": {
+    "planTitle": "Approva il piano",
+    "brief": "In breve · riassunto dell'agente",
+    "noPlan": "Il piano è vuoto.",
+    "planCode": "Codice del piano",
+    "fullPlan": "Piano completo",
+    "openTask": "Apri il task",
+    "readFirst": "Apri il piano completo per approvare.",
+    "whole": {
+      "one": "Approvi tutto il piano (1 sezione), non solo il riassunto.",
+      "other": "Approvi tutto il piano ({n} sezioni), non solo il riassunto."
+    },
+    "alsoAsks": "L'agente ti ha anche fatto una domanda: approvare il piano non le risponde.",
+    "answer": "Rispondi"
+  },
+  "scope": {
+    "title": {
+      "one": "1 file fuori dall'ambito",
+      "other": "{n} file fuori dall'ambito"
+    },
+    "body": "L'agente ha cambiato file che il task non prevedeva. Se vanno bene, allarga l'ambito; altrimenti rimanda il task all'agente.",
+    "button": "Allarga l'ambito",
+    "done": "Ambito allargato.",
+    "cardLine": "File fuori dall'ambito: {n}",
+    "special": "nome con caratteri speciali: verrà aggiunto solo questo file",
+    "willAdd": "Si aggiungono all'ambito questi file ({n})"
+  },
+  "agents": {
+    "theirs": "Ci pensa l'agente",
+    "theirsHint": "Controlli rossi o prove scadute: le sistema l'agente, non serve una tua decisione.",
+    "failing": "Controlli rossi",
+    "stale": "Prove scadute",
+    "sessions": "Sessioni",
+    "none": "Nessun agente al lavoro."
   }
 }

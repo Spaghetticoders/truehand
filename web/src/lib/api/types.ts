@@ -203,7 +203,7 @@ export interface Me {
 
 export interface QueuedAction {
   id: string
-  kind: 'approve' | 'push' | 'pr' | 'config' | 'commit-config' | 'restack'
+  kind: 'approve' | 'push' | 'pr' | 'config' | 'commit-config' | 'restack' | 'scope'
   projectId: string
   taskId: string
   planSha256?: string
@@ -347,6 +347,15 @@ export interface RestackPreview {
   ignoreHash?: string
 }
 
+/** GET …/scope: files changed outside the task's scope, and the patterns that would cover them. */
+export interface ScopePreview {
+  task: string
+  scope: string[]
+  outside: string[]
+  outsideCount?: number
+  add: string[]
+}
+
 export interface PushPreview {
   from: string
   head: string
@@ -441,6 +450,8 @@ export type ServerEvent =
   | { type: 'waiting'; count: number }
   | { type: 'machine'; id: string; status: MachineStatus }
   | { type: 'passkeys' }
+  /** The event stream to the server opened or dropped. */
+  | { type: 'connection'; up: boolean }
 
 export interface PtyHandlers {
   onHello?: (h: { cols: number; rows: number; status: SessionStatus; waitingFor?: string }) => void
@@ -485,6 +496,9 @@ export interface Api {
   configIntent(pid: string, action: 'commit-config' | 'push-base', configSha256: string, approver?: string): Promise<IntentRequest>
   /** Without a signature, from and head are the preview's: the person's confirmation is for that push only. */
   pushBase(pid: string, signedIntent?: SignedIntent, shown?: { from: string; head: string }): Promise<ActResult>
+  scopePreview(pid: string, id: string): Promise<ScopePreview>
+  /** Adds the patterns to the task's scope: a human act (owner passkey, the Mac, or queued for it). */
+  widenScope(pid: string, id: string, p: { add: string[] }): Promise<ActResult & { scope?: string[] }>
   /** A restack the server can prove (409 no-restack-point when none). */
   restackPreview(pid: string, id: string): Promise<RestackPreview>
   /** Moves the task's base to the point shown: a human act (owner passkey, the Mac, or queued for it). */

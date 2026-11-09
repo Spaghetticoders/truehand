@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
   import IgnoredFiles from './IgnoredFiles.svelte'
+  import FileList from './FileList.svelte'
+  import { specialTag } from '../scopeNames'
   import Modal from './Modal.svelte'
   import { t, type Key } from '../i18n/index.svelte'
   import { cancelPending, signing, signPending } from '../stores/sign.svelte'
@@ -62,6 +64,13 @@
     <div class="sheet">
       {#if p.context.title}
         <p class="ctx"><strong>{p.context.title}</strong>{#if p.context.branch}<code>{p.context.branch}</code>{/if}</p>
+      {/if}
+      {#if p.context.scope}
+        {@const sc = p.context.scope}
+        <dl class="summary">
+          <div><dt>{t('restack.task')}</dt><dd class="mono">{sc.task}</dd></div>
+        </dl>
+        <FileList files={sc.outside} count={sc.outsideCount} label={t('scope.willAdd', { n: Math.max(sc.outsideCount ?? 0, sc.outside.length) })} open tag={specialTag} />
       {/if}
       {#if p.context.restack}
         {@const rs = p.context.restack}

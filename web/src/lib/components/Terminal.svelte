@@ -232,10 +232,11 @@
       grid-template-columns: repeat(4, 1fr);
     }
     .key {
-      height: 38px;
+      height: 44px;
     }
     .bar > .btn {
       justify-self: start;
+      min-height: 44px;
     }
   }
 </style>

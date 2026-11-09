@@ -80,6 +80,12 @@
     border-top: 1px solid var(--border);
   }
   @media (max-width: 640px) {
+    header .btn.icon {
+      width: 44px;
+      height: 44px;
+    }
+  }
+  @media (max-width: 640px) {
     dialog {
       margin: auto auto 0;
       width: 100vw;
