@@ -5,6 +5,7 @@ package hook
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -43,7 +44,8 @@ func ProtectedPath(ws *core.Workspace, p string) bool {
 		}
 		rel = r
 	}
-	rel = filepath.ToSlash(filepath.Clean(rel))
+	// Case-folded: on a case-insensitive file system (macOS, Windows) .TRUEHAND is .truehand.
+	rel = strings.ToLower(filepath.ToSlash(filepath.Clean(rel)))
 	return glob.MatchAny(Protected, rel) && !glob.MatchAny(AgentWritable, rel)
 }
 
@@ -142,7 +144,7 @@ func checkGit(ws *core.Workspace, cwd, sub string, args, global []string) Decisi
 	switch sub {
 	case "checkout", "restore", "apply", "rm", "mv", "am", "stash":
 		for _, a := range args {
-			if strings.Contains(a, ".truehand") || ProtectedPath(ws, abs(cwd, a)) {
+			if mentionsTruehand(a) || ProtectedPath(ws, abs(cwd, a)) {
 				return deny("`git %s` on %s would rewrite truehand's files", sub, a)
 			}
 		}
@@ -193,7 +195,7 @@ var interpreters = map[string]bool{
 	"python": true, "python3": true, "node": true, "ruby": true, "perl": true, "php": true, "deno": true, "bun": true, "osascript": true,
 }
 
-var protectedRe = regexp.MustCompile(`\.truehand/(config\.ya?ml|tasks/[^/\s'"]+/(task\.yaml|events\.jsonl|approvals\.jsonl|evidence))`)
+var protectedRe = regexp.MustCompile(`(?i)\.truehand/(config\.ya?ml|tasks/[^/\s'"]+/(task\.yaml|events\.jsonl|approvals\.jsonl|evidence))`)
 
 var writeCmds = map[string]bool{
 	"cp": true, "mv": true, "rm": true, "tee": true, "truncate": true, "touch": true, "dd": true,
@@ -205,15 +207,22 @@ func checkShellWrite(ws *core.Workspace, cwd string, words []string) Decision {
 	// commands that write.
 	for i, w := range words {
 		if w == ">" && i+1 < len(words) {
-			if ProtectedPath(ws, abs(cwd, words[i+1])) || strings.Contains(words[i+1], ".truehand") && !agentWritable(words[i+1]) {
+			if ProtectedPath(ws, abs(cwd, words[i+1])) || mentionsTruehand(words[i+1]) && !agentWritable(words[i+1]) {
 				return deny("redirecting into %s: only truehand writes it", words[i+1])
 			}
 		}
 	}
 	if words[0] == "ln" {
 		for _, w := range words[1:] {
-			if strings.Contains(w, ".truehand") || ProtectedPath(ws, abs(cwd, w)) {
+			if mentionsTruehand(w) || ProtectedPath(ws, abs(cwd, w)) {
 				return deny("no links under .truehand: they could expose files outside the task")
+			}
+		}
+	}
+	if words[0] == "find" && findWrites(words[1:]) {
+		for _, sp := range findStarts(words[1:]) {
+			if findReachesTruehand(ws, cwd, sp) {
+				return deny("`find` from %s with -delete/-exec could change truehand's files: name a directory that does not contain .truehand", sp)
 			}
 		}
 	}
@@ -222,21 +231,74 @@ func checkShellWrite(ws *core.Workspace, cwd string, words []string) Decision {
 	}
 	if words[0] == "cp" || words[0] == "install" {
 		for _, w := range copyTargets(words[1:]) {
-			if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !agentWritable(w) {
+			if ProtectedPath(ws, abs(cwd, w)) || mentionsTruehand(w) && !agentWritable(w) {
 				return deny("`%s` would modify %s: only truehand writes it", words[0], w)
 			}
 		}
 		return allow()
 	}
-	if words[0] == "sed" && !sedWrites(words[1:], ProtectedPath(ws, cwd) || strings.Contains(cwd, ".truehand")) {
+	if words[0] == "sed" && !sedWrites(words[1:], ProtectedPath(ws, cwd) || mentionsTruehand(cwd)) {
 		return allow()
 	}
 	for _, w := range words[1:] {
-		if ProtectedPath(ws, abs(cwd, w)) || strings.Contains(w, ".truehand") && !agentWritable(w) {
+		if ProtectedPath(ws, abs(cwd, w)) || mentionsTruehand(w) && !agentWritable(w) {
 			return deny("`%s` would modify %s: only truehand writes it", words[0], w)
 		}
 	}
 	return allow()
+}
+
+// findWrites reports whether find acts on what it finds rather than only listing it.
+func findWrites(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls":
+			return true
+		}
+	}
+	return false
+}
+
+// findStarts are find's starting points: the operands before the first expression ("." when
+// there is none).
+func findStarts(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") || a == "(" || a == "!" {
+			break
+		}
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		out = []string{"."}
+	}
+	return out
+}
+
+// findReachesTruehand reports whether a find starting at sp may reach a .truehand: it names
+// one, it cannot be resolved ($VAR, a backquote), or it contains the repo or ~/.truehand.
+func findReachesTruehand(ws *core.Workspace, cwd, sp string) bool {
+	if mentionsTruehand(sp) || strings.ContainsAny(sp, "$`") {
+		return true
+	}
+	home, _ := os.UserHomeDir()
+	if sp == "~" || strings.HasPrefix(sp, "~/") {
+		if home == "" {
+			return true
+		}
+		sp = filepath.Join(home, strings.TrimPrefix(sp, "~"))
+	}
+	dir := realPath(abs(cwd, sp))
+	targets := []string{realPath(ws.Repo.Root)}
+	if home != "" {
+		targets = append(targets, realPath(filepath.Join(home, ".truehand")))
+	}
+	for _, t := range targets {
+		if r, err := filepath.Rel(strings.ToLower(dir), strings.ToLower(t)); err == nil && !strings.HasPrefix(r, "..") {
+			return true
+		}
+	}
+	return false
 }
 
 // copyTargets are what cp or install write: the -t directory, or the last operand. Reading
@@ -340,7 +402,7 @@ func sedWrites(args []string, inProtected bool) bool {
 		}
 	}
 	for _, sc := range scripts {
-		if strings.Contains(sc, ".truehand") || inProtected && strings.ContainsAny(sc, "wW") {
+		if mentionsTruehand(sc) || inProtected && strings.ContainsAny(sc, "wW") {
 			return true
 		}
 	}
@@ -349,8 +411,12 @@ func sedWrites(args []string, inProtected bool) bool {
 
 // agentWritable reports the task files the agent writes itself.
 func agentWritable(path string) bool {
+	path = strings.ToLower(path)
 	return strings.HasSuffix(path, "/plan.md") || strings.HasSuffix(path, "/context.md")
 }
+
+// mentionsTruehand reports whether a word names .truehand, in any case.
+func mentionsTruehand(w string) bool { return strings.Contains(strings.ToLower(w), ".truehand") }
 
 // CheckStop decides whether the agent may end its turn: not while the active task is being
 // built and the verified gate is closed. stopHookActive avoids blocking twice in a row.

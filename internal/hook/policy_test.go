@@ -104,6 +104,16 @@ func TestCheckBash(t *testing.T) {
 		{"printf '%s\\n' '.truehand/tasks/T-1/task.yaml' > /tmp/list.txt", false},
 		{"echo x >> .truehand/config.yaml", true},
 		{"printf x > .truehand/tasks/T-1/task.yaml", true},
+		{"ls ~/.truehand/plugin", false},
+		{"ls -la ~/.truehand/plugin/ 2>/dev/null", false},
+		{"cat ~/.truehand/app/state.json", false},
+		{"stat ~/.truehand", false},
+		{"find ~/.truehand -name '*.json'", false},
+		{"find .truehand/tasks -name task.yaml", false},
+		{"find ~/.truehand -delete", true},
+		{"find .truehand -name '*.jsonl' -exec rm {} ;", true},
+		{"find ~/.truehand/app -type f -execdir chmod 666 {} +", true},
+		{"rm -rf ~/.truehand/plugin", true},
 		{"cat " + filepath.Join(root, "x") + " > " + filepath.Join(root, ".truehand/tasks/T-1/task.yaml"), true},
 	}
 	for _, c := range cases {
