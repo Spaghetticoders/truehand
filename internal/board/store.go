@@ -47,9 +47,27 @@ func (s *Store) Create(t *Task) error {
 	return s.Save(t)
 }
 
+// trackedIgnore re-includes every task file a repo-wide pattern (often *.log) would ignore:
+// CI checks each evidence file against its hash, so all of them must be committed.
+const trackedIgnore = "# Written by Truehand: CI reads every evidence file, so none may be ignored.\n!*\n"
+
+func (s *Store) keepTracked() error {
+	p := filepath.Join(s.TasksDir(), ".gitignore")
+	if _, err := os.Lstat(p); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err := os.MkdirAll(s.TasksDir(), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(trackedIgnore), 0o644)
+}
+
 // Save writes task.yaml. Fields this version does not know, written by a newer one, are kept:
 // an older binary moving a task must not drop what a newer one recorded on it.
 func (s *Store) Save(t *Task) error {
+	if err := s.keepTracked(); err != nil {
+		return err
+	}
 	p := filepath.Join(s.TaskDir(t.ID), "task.yaml")
 	var doc yaml.Node
 	if err := doc.Encode(t); err != nil {
