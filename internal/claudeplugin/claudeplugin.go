@@ -51,6 +51,37 @@ func selfBinary() ([]byte, error) {
 	return os.ReadFile(self)
 }
 
+// withVersion gives the plugin manifest a version naming this binary ("0.1.0+<hash>"):
+// Claude Code keeps a cached copy per version, so a new binary under the same version would
+// never reach it.
+func withVersion(manifest, self []byte) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		return nil, fmt.Errorf("plugin.json: %w", err)
+	}
+	v, err := Version(self)
+	if err != nil {
+		return nil, err
+	}
+	base, _ := m["version"].(string)
+	base, _, _ = strings.Cut(base, "+")
+	m["version"] = base + "+" + v
+	return json.MarshalIndent(m, "", "  ")
+}
+
+// manifestVersion reads the version a written marketplace's plugin carries.
+func manifestVersion(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "plugin", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	_ = json.Unmarshal(b, &m)
+	return m.Version
+}
+
 func write(dir string, self []byte) error {
 	err := fs.WalkDir(truehand.ClaudePlugin, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -63,6 +94,11 @@ func write(dir string, self []byte) error {
 		b, err := truehand.ClaudePlugin.ReadFile(p)
 		if err != nil {
 			return err
+		}
+		if p == "plugin/.claude-plugin/plugin.json" {
+			if b, err = withVersion(b, self); err != nil {
+				return err
+			}
 		}
 		mode := os.FileMode(0o644)
 		if strings.HasPrefix(p, "plugin/bin/") {
@@ -126,10 +162,16 @@ func Install(ctx context.Context) (string, error) {
 	if err := Extract(dir); err != nil {
 		return "", err
 	}
-	if installed, _ := Status(ctx); installed {
-		// Already installed: refresh the marketplace so Claude Code picks up the new copy.
+	if installed, version, _ := status(ctx); installed {
+		// Already installed: refresh the marketplace so Claude Code picks up the new copy,
+		// and drop a copy of another version, which a plain install would keep.
 		if _, err := Claude(ctx, "plugin", "marketplace", "update", "truehand"); err != nil {
 			return dir, err
+		}
+		if version != manifestVersion(dir) {
+			if _, err := Claude(ctx, "plugin", "uninstall", PluginID, "--scope", "user"); err != nil {
+				return dir, err
+			}
 		}
 	}
 	if _, err := Claude(ctx, "plugin", "install", "truehand", "--marketplace", dir, "--scope", "user", "--json"); err != nil {
@@ -140,22 +182,29 @@ func Install(ctx context.Context) (string, error) {
 
 // Status reports whether the plugin is installed and enabled for the user.
 func Status(ctx context.Context) (bool, error) {
+	ok, _, err := status(ctx)
+	return ok, err
+}
+
+// status also reports the installed version ("" when Claude Code does not say).
+func status(ctx context.Context) (bool, string, error) {
 	out, err := Claude(ctx, "plugin", "list", "--json")
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	var list []struct {
 		ID      string `json:"id"`
 		Name    string `json:"name"`
+		Version string `json:"version"`
 		Enabled *bool  `json:"enabled"`
 	}
 	if err := json.Unmarshal(out, &list); err != nil {
-		return false, fmt.Errorf("claude plugin list: unexpected output: %w", err)
+		return false, "", fmt.Errorf("claude plugin list: unexpected output: %w", err)
 	}
 	for _, p := range list {
 		if p.ID == PluginID || p.Name == PluginID {
-			return p.Enabled == nil || *p.Enabled, nil
+			return p.Enabled == nil || *p.Enabled, p.Version, nil
 		}
 	}
-	return false, nil
+	return false, "", nil
 }

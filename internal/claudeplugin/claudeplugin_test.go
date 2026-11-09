@@ -101,3 +101,52 @@ func TestStatus(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code keeps one cached copy per plugin version: the version must change with the
+// binary, or a new binary never reaches it.
+func TestPluginVersionNamesTheBinary(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	if err := write(a, []byte("binary one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(b, []byte("binary two")); err != nil {
+		t.Fatal(err)
+	}
+	va, vb := manifestVersion(a), manifestVersion(b)
+	if !strings.HasPrefix(va, "0.1.0+") || len(va) != len("0.1.0+")+12 || va == vb {
+		t.Fatalf("versions %q %q", va, vb)
+	}
+	if again := t.TempDir(); write(again, []byte("binary one")) != nil || manifestVersion(again) != va {
+		t.Fatal("the same binary must give the same version")
+	}
+}
+
+func TestInstallReplacesAnotherVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, _ := Dir()
+	if err := Extract(dir); err != nil {
+		t.Fatal(err)
+	}
+	ours := manifestVersion(dir)
+	for _, c := range []struct {
+		installed string
+		uninstall bool
+	}{{"0.1.0", true}, {ours, false}} {
+		calls := fakeClaude(t, `[{"id":"truehand@truehand","version":"`+c.installed+`","enabled":true}]`)
+		if _, err := Install(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		un, inst := -1, -1
+		for i, x := range *calls {
+			switch strings.Join(x[:2], " ") {
+			case "plugin uninstall":
+				un = i
+			case "plugin install":
+				inst = i
+			}
+		}
+		if (un >= 0) != c.uninstall || inst < 0 || (c.uninstall && un > inst) {
+			t.Fatalf("installed %q: calls %v", c.installed, *calls)
+		}
+	}
+}
