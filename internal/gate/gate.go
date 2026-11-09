@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/config"
@@ -697,24 +696,13 @@ func OutsideScope(e *Env) ([]string, error) {
 	// task's work, untracked files) is not its change. Up to its tip when closed at a point.
 	closed := e.Task.State == board.Reviewed || e.Task.State == board.Delivered
 	if closed && !(e.AtPoint && e.Tip != "") {
-		// Without a tip, its commits are those made before it went to review: later ones on
-		// the branch are other tasks' work.
-		args := []string{"log", "--format=", "--name-only", "--no-renames", "-z"}
-		if at := reviewedAt(e.Events); !at.IsZero() {
-			args = append(args, "--before="+at.UTC().Format(time.RFC3339))
-		}
-		out, err := e.Repo.Git(append(args, e.Base+"..HEAD")...)
+		// Without a tip, its commits are the ones that change files of its scope: a later
+		// commit on the branch that touches none of them is another task's work.
+		files, err := ownCommitsFiles(e)
 		if err != nil {
 			return nil, err
 		}
-		seen := map[string]bool{}
-		for _, f := range strings.Split(out, "\x00") {
-			f = strings.TrimSpace(f)
-			if f != "" && !seen[f] && f != ".truehand" && !strings.HasPrefix(f, ".truehand/") {
-				seen[f] = true
-				changed = append(changed, f)
-			}
-		}
+		changed = files
 	} else if e.AtPoint && e.Tip != "" {
 		out, err := e.Repo.Git("diff", "--name-only", "--no-renames", "-z", e.Base, e.Tip)
 		if err != nil {
@@ -760,15 +748,40 @@ func OutsideScope(e *Env) ([]string, error) {
 	return out, nil
 }
 
-// reviewedAt is when the task last moved to reviewed, or zero.
-func reviewedAt(events []board.Event) time.Time {
-	var at time.Time
-	for _, ev := range events {
-		if ev.Type == "moved" && ev.To == board.Reviewed {
-			at = ev.Time
+// ownCommitsFiles lists the files changed by the commits in base..HEAD that change at least
+// one file of the task's scope (Truehand's own files aside).
+func ownCommitsFiles(e *Env) ([]string, error) {
+	out, err := e.Repo.Git("rev-list", "--no-merges", e.Base+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, c := range strings.Fields(out) {
+		names, err := e.Repo.Git("diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", c)
+		if err != nil {
+			return nil, err
+		}
+		var touched []string
+		own := false
+		for _, f := range strings.Split(names, "\x00") {
+			if f == "" || f == ".truehand" || strings.HasPrefix(f, ".truehand/") {
+				continue
+			}
+			touched = append(touched, f)
+			own = own || glob.MatchAny(e.Task.Scope, f)
+		}
+		if !own {
+			continue
+		}
+		for _, f := range touched {
+			if !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
 		}
 	}
-	return at
+	return files, nil
 }
 
 // checkInScope: a task with a scope changed nothing outside it, but files another task's scope
