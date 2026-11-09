@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spaghetticoders/truehand/internal/board"
 	"github.com/spaghetticoders/truehand/internal/config"
@@ -684,15 +685,37 @@ func checkAllFresh(e *Env, _ config.Rule) Item {
 	return pass("%d evidence record(s) passed on the current content", len(latest))
 }
 
-// OutsideScope lists the files a task with a scope changed since its base (to its tip at a
-// point) that neither its scope nor the scope of another approved (at least) task claims; none
+// OutsideScope lists the files a task with a scope changed since its base (its commits once
+// reviewed, to its tip at a point; the working tree while it is being built) that neither its scope nor the scope of another approved (at least) task claims; none
 // for a scope-less task.
 func OutsideScope(e *Env) ([]string, error) {
 	if len(e.Task.Scope) == 0 {
 		return nil, nil
 	}
 	var changed []string
-	if e.AtPoint && e.Tip != "" {
+	// A task past building is its commits: what the working tree holds besides them (another
+	// task's work, untracked files) is not its change. Up to its tip when closed at a point.
+	closed := e.Task.State == board.Reviewed || e.Task.State == board.Delivered
+	if closed && !(e.AtPoint && e.Tip != "") {
+		// Without a tip, its commits are those made before it went to review: later ones on
+		// the branch are other tasks' work.
+		args := []string{"log", "--format=", "--name-only", "--no-renames", "-z"}
+		if at := reviewedAt(e.Events); !at.IsZero() {
+			args = append(args, "--before="+at.UTC().Format(time.RFC3339))
+		}
+		out, err := e.Repo.Git(append(args, e.Base+"..HEAD")...)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		for _, f := range strings.Split(out, "\x00") {
+			f = strings.TrimSpace(f)
+			if f != "" && !seen[f] && f != ".truehand" && !strings.HasPrefix(f, ".truehand/") {
+				seen[f] = true
+				changed = append(changed, f)
+			}
+		}
+	} else if e.AtPoint && e.Tip != "" {
 		out, err := e.Repo.Git("diff", "--name-only", "--no-renames", "-z", e.Base, e.Tip)
 		if err != nil {
 			return nil, err
@@ -735,6 +758,17 @@ func OutsideScope(e *Env) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// reviewedAt is when the task last moved to reviewed, or zero.
+func reviewedAt(events []board.Event) time.Time {
+	var at time.Time
+	for _, ev := range events {
+		if ev.Type == "moved" && ev.To == board.Reviewed {
+			at = ev.Time
+		}
+	}
+	return at
 }
 
 // checkInScope: a task with a scope changed nothing outside it, but files another task's scope

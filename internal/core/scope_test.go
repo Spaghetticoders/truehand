@@ -118,3 +118,40 @@ func TestBaseFallbackRefused(t *testing.T) {
 		t.Fatalf("base past the merge-base accepted: %s %v", b, err)
 	}
 }
+
+// A delivered task is its commits: another task's uncommitted work in the folder is not
+// "outside its scope". While building, the working tree is the task's change.
+func TestOutsideScopeOfAClosedTaskIsItsCommits(t *testing.T) {
+	dir := bareRepo(t)
+	write(t, config.Path(dir), scopeConfig)
+	write(t, filepath.Join(dir, "Podfile.lock"), "v1\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "chore: truehand")
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	ws, _ := Open(dir)
+	ws.NewTask("T-1", "x", "", "lib/**")
+	write(t, filepath.Join(dir, "lib/a.dart"), "a\n")
+	write(t, filepath.Join(dir, "lib2/lock.dart"), "outside, committed\n")
+	git(t, dir, "add", "lib", "lib2", ".truehand")
+	git(t, dir, "commit", "-q", "-m", "feat: a")
+	write(t, filepath.Join(dir, "Podfile.lock"), "v2, another task's\n")
+	write(t, filepath.Join(dir, "tool/wakeword/x.bin"), "untracked\n")
+
+	plan, err := ws.PlanScope("T-1")
+	if err != nil || len(plan.Outside) != 3 {
+		t.Fatalf("building: the working tree is the change: %+v %v", plan, err)
+	}
+	for _, st := range []board.State{board.Reviewed, board.Delivered} {
+		task, _ := ws.Store.Load("T-1")
+		task.State = st
+		ws.Store.Save(task)
+		ws = reopen(t, dir)
+		plan, err := ws.PlanScope("T-1")
+		if err != nil || strings.Join(plan.Outside, ",") != "lib2/lock.dart" {
+			t.Fatalf("%s: outside should be only the committed lib2/lock.dart: %+v %v", st, plan, err)
+		}
+		if ok, msg := inScope(t, ws, "T-1"); ok || strings.Contains(msg, "Podfile") || strings.Contains(msg, "wakeword") {
+			t.Fatalf("%s in_scope: %v %s", st, ok, msg)
+		}
+	}
+}

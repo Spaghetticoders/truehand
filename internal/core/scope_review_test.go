@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spaghetticoders/truehand/internal/board"
+
 	"github.com/spaghetticoders/truehand/internal/config"
 	"github.com/spaghetticoders/truehand/internal/glob"
 )
@@ -38,5 +40,31 @@ func TestReviewProposedScopeIsLiteralPaths(t *testing.T) {
 		if glob.MatchAny(task.Scope, other) {
 			t.Errorf("accepting the proposed %v gave T-1 %s, a file it never changed", plan.Add, other)
 		}
+	}
+}
+
+// A delivered task is judged on its own commits: later work on the branch by another task
+// (not stacked on it) is not "outside its scope".
+func TestReviewLaterCommitsAreNotADeliveredTasksOutside(t *testing.T) {
+	dir := bareRepo(t)
+	write(t, config.Path(dir), scopeConfig)
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "chore: truehand")
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	ws, _ := Open(dir)
+	ws.NewTask("T-1", "x", "", "lib/**")
+	write(t, filepath.Join(dir, "lib/a.go"), "package lib\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "feat: a")
+	task, _ := ws.Store.Load("T-1")
+	task.State = board.Delivered
+	ws.Store.Save(task)
+	ws.NewTask("T-2", "y", "")
+	write(t, filepath.Join(dir, "web/b.ts"), "x\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "feat: b")
+	ws = reopen(t, dir)
+	if ok, msg := inScope(t, ws, "T-1"); !ok {
+		t.Fatalf("T-1, delivered, fails in_scope because of T-2's later commit: %s", msg)
 	}
 }
