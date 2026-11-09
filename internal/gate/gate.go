@@ -806,6 +806,11 @@ func checkMatchesHead(e *Env, r config.Rule) Item {
 	if it := checkAllFresh(e, r); it.Status != StatusPass {
 		return it
 	}
+	// At a stack point the evidence was matched against that commit; the working tree holds the
+	// next task's work, judged by that task's own gates.
+	if e.AtPoint && e.Tip != "" {
+		return pass("evidence passed on exactly what %.12s contains", e.Tip)
+	}
 	dirty, err := e.Repo.Dirty(e.Changed)
 	if err != nil {
 		return fail("git status: %v", err)
