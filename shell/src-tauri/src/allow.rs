@@ -8,6 +8,7 @@ const HUMAN: &[(&str, &str)] = &[
     ("POST", "/api/projects/*/tasks/*/actions/push"),
     ("POST", "/api/projects/*/tasks/*/actions/open-pr"),
     ("POST", "/api/projects/*/tasks/*/restack"),
+    ("POST", "/api/projects/*/tasks/*/scope"),
     ("POST", "/api/queued/*/confirm"),
     ("POST", "/api/pair/code"),
     ("DELETE", "/api/devices/*"),
@@ -132,6 +133,21 @@ mod tests {
         assert!(!human_request("POST", "/api/projects/p_1/tasks/restack"));
         assert!(!human_request("POST", "/api/projects/p_1/tasks/../restack"));
         assert!(!human_request("POST", "/api/projects/p_1/tasks/T-1/restack?on=x"));
+    }
+
+    #[test]
+    fn allows_scoping_a_task() {
+        assert!(human_request("POST", "/api/projects/p_1/tasks/T-1/scope"));
+        assert!(human_request("POST", "/api/projects/m_1~p_1/tasks/T-1/scope"));
+    }
+
+    #[test]
+    fn refuses_reading_or_extending_scope() {
+        assert!(!human_request("GET", "/api/projects/p_1/tasks/T-1/scope"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/T-1/scope/x"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/scope"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/../scope"));
+        assert!(!human_request("POST", "/api/projects/p_1/tasks/T-1/scope?files=x"));
     }
 
     #[test]
