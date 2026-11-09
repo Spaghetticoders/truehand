@@ -60,7 +60,8 @@ func approvedGate(t *testing.T, ws *Workspace) (bool, string) {
 	task, _ := ws.Store.Load("T-1")
 	res, err := ws.Check(task, board.Approved)
 	if err != nil {
-		t.Fatal(err)
+		// A task without a base (one past its branch's merge-base) has no open gate either.
+		return false, err.Error()
 	}
 	for _, it := range res.Items {
 		if it.Check == "human_approval" {

@@ -479,3 +479,133 @@ func TestNewTaskDoesNotStackOverDirt(t *testing.T) {
 		t.Fatalf("stacked over dirt on creation: %+v", c)
 	}
 }
+
+// CI honours the list a human accepted: COACH-1, judged at the point with its dirt ignored,
+// covers its files; COACH-2 the rest.
+func TestCIHonoursTheAcceptedIgnoreList(t *testing.T) {
+	ws, point := dirtyStack(t, nil, nil, nil)
+	plan, err := ws.PlanRestack("COACH-2")
+	if err != nil || len(plan.Ignore) == 0 {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	if _, err := ws.RestackWith("COACH-2", point, "COACH-1", plan.IgnoreHash, "human:h@x.y", nil); err != nil {
+		t.Fatal(err)
+	}
+	ws = reopen(t, ws.Repo.Root)
+	c2, _ := ws.Store.Load("COACH-2")
+	review(t, ws, c2)
+	for _, id := range []string{"COACH-1", "COACH-2"} {
+		x, _ := ws.Store.Load(id)
+		x.State = board.Delivered
+		ws.Store.Save(x)
+	}
+	sgit(t, ws.Repo.Root, "add", ".truehand")
+	sgit(t, ws.Repo.Root, "commit", "-q", "-m", "chore: delivered")
+	r, err := ci.Verify(reopen(t, ws.Repo.Root), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Pass {
+		t.Fatalf("CI refused the chain with an accepted ignore list: %v %v", r.Problems, r.Uncovered)
+	}
+}
+
+// threeStack: COACH-1 (no scope) reviewed with Podfile.lock dirt, and, when wip, COACH-2's
+// file already in the folder; COACH-2 (scope lib/c2.txt) stacked on it by a human and
+// delivered, committing out.txt too when outside; COACH-3 made the old way, from main.
+func threeStack(t *testing.T, outside, wip bool) (*core.Workspace, string, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "demo")
+	os.MkdirAll(dir, 0o755)
+	for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "h@x.y"}, {"config", "user.name", "H"}, {"config", "core.hooksPath", ".git/hooks"}} {
+		sgit(t, dir, a...)
+	}
+	swrite(t, dir, ".truehand/config.yaml", stackConfig)
+	swrite(t, dir, "Podfile.lock", "v1\n")
+	commitAll(t, dir, "chore: truehand")
+	main := sgit(t, dir, "rev-parse", "HEAD")
+	sgit(t, dir, "checkout", "-q", "-b", "feat")
+	ws := reopen(t, dir)
+	c1, _ := ws.NewTask("COACH-1", "first", "")
+	swrite(t, dir, "lib/a.txt", "one\n")
+	swrite(t, dir, "Podfile.lock", "v2, another task's\n")
+	if wip {
+		swrite(t, dir, "lib/c2.txt", "two, in progress\n")
+	}
+	review(t, ws, c1)
+	c1.State = board.Reviewed
+	ws.Store.Save(c1)
+	sgit(t, dir, "add", "lib/a.txt", ".truehand")
+	sgit(t, dir, "commit", "-q", "-m", "feat: one")
+	p1 := sgit(t, dir, "rev-parse", "HEAD")
+
+	ws.Store.Create(&board.Task{ID: "COACH-2", Title: "second", State: board.Building, Base: main, BaseRef: "main", Scope: []string{"lib/c2.txt"}})
+	swrite(t, dir, "lib/c2.txt", "two\n")
+	add := []string{"lib/c2.txt", ".truehand"}
+	if outside {
+		swrite(t, dir, "out.txt", "nobody's\n")
+		add = append(add, "out.txt")
+	}
+	sgit(t, dir, append([]string{"add"}, add...)...)
+	sgit(t, dir, "commit", "-q", "-m", "feat: two")
+	ws = reopen(t, dir)
+	plan, err := ws.PlanRestack("COACH-2")
+	if wip {
+		if err == nil && slices.Contains(plan.Ignore, "lib/c2.txt") {
+			t.Fatalf("COACH-2's committed file offered as dirt to ignore: %v", plan.Ignore)
+		}
+		return ws, p1, ""
+	}
+	if err != nil || plan.Point != p1 {
+		t.Fatalf("COACH-2 plan: %+v %v", plan, err)
+	}
+	if _, err := ws.RestackWith("COACH-2", p1, "COACH-1", plan.IgnoreHash, "human:h@x.y", nil); err != nil {
+		t.Fatal(err)
+	}
+	ws = reopen(t, dir)
+	c2, _ := ws.Store.Load("COACH-2")
+	review(t, ws, c2)
+	c2.State = board.Delivered
+	ws.Store.Save(c2)
+	sgit(t, dir, "add", ".truehand")
+	sgit(t, dir, "commit", "-q", "-m", "chore: two delivered")
+	tip2 := sgit(t, dir, "rev-parse", "HEAD")
+
+	ws.Store.Create(&board.Task{ID: "COACH-3", Title: "third", State: board.Approved, Base: main, BaseRef: "main", Scope: []string{"lib/c3.txt"}})
+	swrite(t, dir, "lib/c3.txt", "three\n")
+	sgit(t, dir, "add", "lib/c3.txt", ".truehand")
+	sgit(t, dir, "commit", "-q", "-m", "feat: three")
+	return reopen(t, dir), p1, tip2
+}
+
+// Three tasks stacked: COACH-3 stacks on COACH-2's tip, through the chain COACH-2 → COACH-1,
+// and nothing COACH-2 committed is ever offered as dirt to ignore.
+func TestThreeLevelStack(t *testing.T) {
+	ws, _, tip2 := threeStack(t, false, false)
+	plan, err := ws.PlanRestack("COACH-3")
+	if err != nil || plan.Point != tip2 || plan.Pred.ID != "COACH-2" || len(plan.Ignore) != 0 {
+		t.Fatalf("COACH-3 plan: %+v %v (want %s on COACH-2, nothing to ignore)", plan, err, tip2)
+	}
+	if _, err := ws.RestackWith("COACH-3", plan.Point, "COACH-2", plan.IgnoreHash, "human:h@x.y", nil); err != nil {
+		t.Fatal(err)
+	}
+	ws = reopen(t, ws.Repo.Root)
+	c3, _ := ws.Store.Load("COACH-3")
+	fp, err := ws.Fingerprint(c3)
+	if err != nil || len(fp.Files) != 1 || fp.Files["lib/c3.txt"] == "" {
+		t.Fatalf("COACH-3's change: %v %v", fp.Files, err)
+	}
+
+	// COACH-2 committed a file outside its scope: no point on COACH-2, and none below it either
+	// (that would hand COACH-2's commits to COACH-3): the plan fails and says why.
+	ws, _, _ = threeStack(t, true, false)
+	if plan, err := ws.PlanRestack("COACH-3"); err == nil {
+		t.Fatalf("COACH-3 stacked over COACH-2's uncovered out.txt: %+v", plan)
+	} else if !strings.Contains(err.Error(), "out.txt") {
+		t.Fatalf("plan error does not name the uncovered file: %v", err)
+	}
+
+	// COACH-1's hand saw COACH-2's file in progress: that file is committed later, so it is
+	// never dirt (threeStack fails if it is offered).
+	threeStack(t, false, true)
+}

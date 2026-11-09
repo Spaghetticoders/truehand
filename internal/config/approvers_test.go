@@ -72,3 +72,23 @@ func TestApproverRSAAndRPID(t *testing.T) {
 		}
 	}
 }
+
+func TestTemplateChecksScope(t *testing.T) {
+	for _, st := range config.Stacks {
+		s, err := config.Template(st, "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := config.Parse([]byte(s))
+		if err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+		found := false
+		for _, r := range c.Gates["verified"] {
+			found = found || r.Check == "in_scope"
+		}
+		if !found {
+			t.Errorf("%s: no in_scope in verified", st)
+		}
+	}
+}

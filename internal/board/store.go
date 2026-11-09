@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -46,12 +47,51 @@ func (s *Store) Create(t *Task) error {
 	return s.Save(t)
 }
 
+// Save writes task.yaml. Fields this version does not know, written by a newer one, are kept:
+// an older binary moving a task must not drop what a newer one recorded on it.
 func (s *Store) Save(t *Task) error {
-	b, err := yaml.Marshal(t)
+	p := filepath.Join(s.TaskDir(t.ID), "task.yaml")
+	var doc yaml.Node
+	if err := doc.Encode(t); err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(p); err == nil {
+		keepUnknown(&doc, old)
+	}
+	b, err := yaml.Marshal(&doc)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(s.TaskDir(t.ID), "task.yaml"), b)
+	return writeAtomic(p, b)
+}
+
+// keepUnknown appends to the mapping doc the top-level entries of old whose keys Task does not
+// declare.
+func keepUnknown(doc *yaml.Node, old []byte) {
+	var prev yaml.Node
+	if yaml.Unmarshal(old, &prev) != nil || len(prev.Content) != 1 || prev.Content[0].Kind != yaml.MappingNode || doc.Kind != yaml.MappingNode {
+		return
+	}
+	known := taskFields()
+	m := prev.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i].Value; !known[k] {
+			doc.Content = append(doc.Content, m.Content[i], m.Content[i+1])
+		}
+	}
+}
+
+func taskFields() map[string]bool {
+	known := map[string]bool{}
+	rt := reflect.TypeOf(Task{})
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("yaml"), ",")
+		if name == "" {
+			name = strings.ToLower(rt.Field(i).Name)
+		}
+		known[name] = true
+	}
+	return known
 }
 
 func (s *Store) Load(id string) (*Task, error) {

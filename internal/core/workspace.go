@@ -276,10 +276,12 @@ func (w *Workspace) baseOf(t *board.Task) (string, error) {
 	if mb == strings.TrimSpace(head) {
 		return t.Base, nil
 	}
-	if isAncestor(w, t.Base, mb) {
+	if t.Base == mb || isAncestor(w, t.Base, mb) {
 		return mb, nil
 	}
-	return t.Base, nil
+	// A start past the merge-base would skip commits of the branch that no check covers: only
+	// a stack (stacked_on) may do that.
+	return "", fmt.Errorf("task %s starts at %s, after where its branch leaves %s: the commits between are no task's. Run `truehand task restack %s` if a reviewed task covers them", t.ID, short(t.Base), t.BaseRef, t.ID)
 }
 
 // isAncestor reports whether a is an ancestor of b.
@@ -305,7 +307,7 @@ func (w *Workspace) Check(t *board.Task, target board.State) (gate.Result, error
 	env.ApproversRef = w.ApproversRef
 	env.Approvers = func() ([]config.Approver, error) { return w.Approvers(t) }
 	if tip, ignore, err := w.tipOf(t); err == nil && tip != "" {
-		env.AtPoint, env.Ignore = true, ignore
+		env.AtPoint, env.Tip, env.Ignore = true, tip, ignore
 	}
 	return gate.Evaluate(env, target), nil
 }

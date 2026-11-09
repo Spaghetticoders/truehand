@@ -97,6 +97,7 @@ gates:
 | `evidence_fresh` | the latest record of every gated hand passed, is intact and fresh |
 | `evidence_matches_head` | `evidence_fresh`, and no task file has uncommitted changes (the default for `delivered`) |
 | `conventional_commits` | every commit since the task base is `type(scope): summary` |
+| `in_scope` | a task with a `scope` changed no file outside it, except files another task's scope claims; it lists the others, so the agent learns at `verified`, not in CI, that a human must widen the scope (the app does it, recorded as that human's decision) or the change be undone. Passes for tasks without a scope |
 
 ## Signed approvals
 
@@ -213,6 +214,7 @@ its files, and the other tasks' work never makes its evidence stale.
 
 ## Stacked tasks
 
+
 When a branch carries a reviewed task not yet merged (COACH-1) and a new task continues on top
 of it (COACH-2), the new task is stacked: its `task.yaml` gets `stacked_on: COACH-1` and a
 `base` at the commit that closes COACH-1, so its diff, `test-proof` reverts and scope hold only
@@ -224,6 +226,13 @@ after that point stay COACH-2's. If COACH-1's evidence saw files its commits do 
 (another task's changes in the folder, untracked files), they are listed and ignored only if
 you accept that list. COACH-1 is then judged at that commit and its hands no longer
 run; CI accepts the pair when both are delivered, each covering its own files.
+
+A task whose `base` lies past the point where its branch leaves `base:` without being stacked
+has no base (an error asking to restack): the commits in between would otherwise belong to no
+task. From this version on, fields of `task.yaml` that a Truehand binary does not know are
+kept when it saves the task; older binaries drop `stacked_on` when they move a task, so run
+every agent with the same Truehand (the app's plugin) and restack after an older one touched
+the task.
 
 ## Identity
 

@@ -57,6 +57,8 @@ type Env struct {
 	// AtPoint: Now is the task at a commit (another task is stacked on it), not the working
 	// tree; every input of its evidence must match there, but those in Ignore.
 	AtPoint bool
+	// Tip is the commit Now was taken at when AtPoint.
+	Tip string
 	// Ignore, at a point, lists the inputs a human accepted to ignore there: files the working
 	// tree held when a hand ran that are not in the task's commits (see core.RestackWith).
 	Ignore []string
@@ -115,6 +117,7 @@ var checks = map[string]checkFunc{
 	"review_by_other_role":  checkReview,
 	"evidence_fresh":        checkAllFresh,
 	"evidence_matches_head": checkMatchesHead,
+	"in_scope":              checkInScope,
 	"conventional_commits":  checkConventionalCommits,
 }
 
@@ -679,6 +682,75 @@ func checkAllFresh(e *Env, _ config.Rule) Item {
 		}
 	}
 	return pass("%d evidence record(s) passed on the current content", len(latest))
+}
+
+// OutsideScope lists the files a task with a scope changed since its base (to its tip at a
+// point) that neither its scope nor the scope of another approved (at least) task claims; none
+// for a scope-less task.
+func OutsideScope(e *Env) ([]string, error) {
+	if len(e.Task.Scope) == 0 {
+		return nil, nil
+	}
+	var changed []string
+	if e.AtPoint && e.Tip != "" {
+		out, err := e.Repo.Git("diff", "--name-only", "--no-renames", "-z", e.Base, e.Tip)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
+			if f != "" && f != ".truehand" && !strings.HasPrefix(f, ".truehand/") {
+				changed = append(changed, f)
+			}
+		}
+	} else {
+		all, err := e.Repo.ChangedFiles(e.Base, evidence.ExcludedPaths...)
+		if err != nil {
+			return nil, err
+		}
+		changed = all
+	}
+	var others [][]string
+	if tasks, err := e.Store.List(); err == nil {
+		for _, t := range tasks {
+			if t.ID != e.Task.ID && len(t.Scope) > 0 && t.State != board.Planned {
+				others = append(others, t.Scope)
+			}
+		}
+	}
+	var out []string
+	for _, f := range changed {
+		if glob.MatchAny(e.Task.Scope, f) {
+			continue
+		}
+		claimed := false
+		for _, sc := range others {
+			if glob.MatchAny(sc, f) {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// checkInScope: a task with a scope changed nothing outside it, but files another task's scope
+// claims (tasks sharing a branch). Without a scope the task owns every changed file.
+func checkInScope(e *Env, _ config.Rule) Item {
+	if len(e.Task.Scope) == 0 {
+		return pass("no scope: the task owns every file it changes")
+	}
+	out, err := OutsideScope(e)
+	if err != nil {
+		return fail("in_scope: %v", err)
+	}
+	if len(out) > 0 {
+		return fail("%d changed file(s) outside the task's scope: %s. Ask the human to widen the scope, or undo the change", len(out), short(out))
+	}
+	return pass("every changed file is in the task's scope")
 }
 
 // checkMatchesHead is evidence_fresh plus: none of the task's files has uncommitted changes,

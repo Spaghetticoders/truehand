@@ -72,6 +72,7 @@ gates:
     - check: plan_valid
     - check: human_approval
   verified:
+    - check: in_scope              # tasks with a scope changed only their files
     - check: test_proof%s%s
   reviewed:
     - check: review_by_other_role

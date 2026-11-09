@@ -126,7 +126,8 @@ func (w *Workspace) signedIgnore(c *board.Task) []string {
 
 // dirtAt lists the files a task's latest evidence saw that are not part of its change at
 // point: what its working tree held besides its commits (another task's files, untracked
-// leftovers, files out of a scope narrowed later, and files of its own never committed).
+// leftovers, files out of a scope narrowed later, and files of its own never committed). Files
+// any commit after point changes are not in it: they belong to the branch, not to the folder.
 func (w *Workspace) dirtAt(x *board.Task, point string) ([]string, error) {
 	base, err := w.BaseOf(x)
 	if err != nil {
@@ -140,10 +141,20 @@ func (w *Workspace) dirtAt(x *board.Task, point string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A file committed after point on this history is work of the branch (a task's own, maybe
+	// still running when x's hand ran), never dirt to ignore.
+	later, err := changedBetween(w, point, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	committed := map[string]bool{}
+	for _, f := range later {
+		committed[f] = true
+	}
 	set := map[string]bool{}
 	for _, r := range evidence.LatestAll(recs) {
 		for f := range r.Inputs.Files {
-			if _, in := fp.Files[f]; !in {
+			if _, in := fp.Files[f]; !in && !committed[f] {
 				set[f] = true
 			}
 		}
@@ -292,6 +303,11 @@ func (w *Workspace) stackFor(point string, lenient bool, except ...string) (*boa
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// A stacked task whose own commits start at or after point: stacking here would take them
+	// into the new task. The place is on top of that task, once its own stack holds.
+	if y := w.stackedAfter(tasks, point, except); y != nil {
+		return nil, nil, []string{fmt.Sprintf("%s's commits start at %s, after %s: stack on %s", y.ID, short(y.Base), short(point), y.ID)}, errNoStack
+	}
 	var best *board.Task
 	var bestIgnore []string
 	bestBase := ""
@@ -322,6 +338,27 @@ func (w *Workspace) stackFor(point string, lenient bool, except ...string) (*boa
 	return best, bestIgnore, nil, nil
 }
 
+// stackedAfter is a stacked task, approved at least and not in except, whose base lies on
+// HEAD's history at or after point.
+func (w *Workspace) stackedAfter(tasks []*board.Task, point string, except []string) *board.Task {
+	head, err := w.git("rev-parse", "HEAD")
+	if err != nil {
+		return nil
+	}
+	head = strings.TrimSpace(head)
+	for _, y := range tasks {
+		if y.StackedOn == "" || y.State == board.Planned || slices.Contains(except, y.ID) {
+			continue
+		}
+		after := y.Base == point || isAncestor(w, point, y.Base)
+		onHead := y.Base == head || isAncestor(w, y.Base, head)
+		if after && onHead {
+			return y
+		}
+	}
+	return nil
+}
+
 // gatesAt requires every gate up to x's state to pass with x judged at tip.
 func (w *Workspace) gatesAt(x *board.Task, tip string, ignore []string) error {
 	base, err := w.BaseOf(x)
@@ -338,7 +375,7 @@ func (w *Workspace) gatesAt(x *board.Task, tip string, ignore []string) error {
 	}
 	env.ApproversRef = w.ApproversRef
 	env.Approvers = func() ([]config.Approver, error) { return w.Approvers(x) }
-	env.AtPoint = true
+	env.AtPoint, env.Tip = true, tip
 	env.Ignore = ignore
 	for _, st := range board.States[1:] {
 		if res := gate.Evaluate(env, st); !res.Pass {

@@ -10,7 +10,7 @@ import (
 var cache sync.Map
 
 // Match reports whether path matches pattern. "**" matches any number of path segments,
-// "*" anything except "/", "?" one non-"/" character.
+// "*" anything except "/", "?" one non-"/" character; "\\" makes the next character literal.
 func Match(pattern, path string) bool {
 	re, ok := cache.Load(pattern)
 	if !ok {
@@ -29,7 +29,8 @@ func MatchAny(patterns []string, path string) bool {
 	return false
 }
 
-func toRegexp(p string) string {
+func toRegexp(pattern string) string {
+	p := []rune(pattern)
 	var b strings.Builder
 	b.WriteString("^")
 	for i := 0; i < len(p); i++ {
@@ -43,6 +44,9 @@ func toRegexp(p string) string {
 			} else {
 				b.WriteString(".*")
 			}
+		case c == '\\' && i+1 < len(p):
+			i++
+			b.WriteString(regexp.QuoteMeta(string(p[i])))
 		case c == '*':
 			b.WriteString("[^/]*")
 		case c == '?':
@@ -52,5 +56,17 @@ func toRegexp(p string) string {
 		}
 	}
 	b.WriteString("$")
+	return b.String()
+}
+
+// Escape turns a path into the pattern that matches exactly that path.
+func Escape(path string) string {
+	var b strings.Builder
+	for i := 0; i < len(path); i++ {
+		if c := path[i]; c == '*' || c == '?' || c == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(path[i])
+	}
 	return b.String()
 }
